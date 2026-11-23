@@ -3,6 +3,8 @@ package prsize
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -84,17 +86,18 @@ func verdict(lines, limit int, exception func() (bool, error)) (bool, string, er
 	return false, "FAIL: " + count + ".", nil
 }
 
-func renderReport(result totals, message string, passed bool) string {
+func renderReport(result inspection, message string, passed bool) string {
 	var report strings.Builder
 	report.WriteString("| Class | Files | Changed lines | Counted |\n| --- | ---: | ---: | --- |\n")
 	for index, name := range [...]string{"Generated", "Tests", "Docs", "Config", "Production"} {
-		bucket := result[index]
+		bucket := result.totals[index]
 		counted := "no"
 		if index == int(production) {
 			counted = "yes"
 		}
 		fmt.Fprintf(&report, "| %s | %d | %d | %s |\n", name, bucket.files, bucket.lines, counted)
 	}
+	writeSkippedBinary(&report, result.skippedBinary)
 	fmt.Fprintf(&report, "\n%s\n", message)
 	if !passed {
 		fmt.Fprintf(&report, "\nTo request an exception, add the `%s` label.\n", exceptionLabel)
@@ -102,4 +105,21 @@ func renderReport(result totals, message string, passed bool) string {
 		fmt.Fprintf(&report, reason, exceptionPrefix, exceptionLength)
 	}
 	return report.String()
+}
+
+func writeSkippedBinary(report *strings.Builder, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	report.WriteString("\nBinary files not counted:\n\n")
+	const limit = 50
+	sorted := slices.Sorted(slices.Values(paths))
+	for _, path := range sorted[:min(len(sorted), limit)] {
+		quoted := strconv.QuoteToASCII(path)
+		safe := strings.ReplaceAll(quoted[1:len(quoted)-1], "`", `\x60`)
+		fmt.Fprintf(report, "- `%s`\n", safe)
+	}
+	if len(sorted) > limit {
+		fmt.Fprintf(report, "- and %d more\n", len(sorted)-limit)
+	}
 }

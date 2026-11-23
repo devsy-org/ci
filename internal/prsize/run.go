@@ -31,9 +31,13 @@ func run(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	passed, message, err := verdict(result[production].lines, opts.Limit, func() (bool, error) {
-		return readException(os.Getenv("GITHUB_EVENT_PATH"), os.ReadFile)
-	})
+	passed, message, err := verdict(
+		result.totals[production].lines,
+		opts.Limit,
+		func() (bool, error) {
+			return readException(os.Getenv("GITHUB_EVENT_PATH"), os.ReadFile)
+		},
+	)
 	if err != nil {
 		return 2, err
 	}

@@ -2,6 +2,7 @@ package prsize
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -130,7 +131,11 @@ func TestVerdictUnreadableEvent(t *testing.T) {
 func TestRenderFailure(t *testing.T) {
 	t.Parallel()
 
-	got := renderReport(totals{production: {files: 1, lines: 401}}, "FAIL", false)
+	got := renderReport(
+		inspection{totals: totals{production: {files: 1, lines: 401}}},
+		"FAIL",
+		false,
+	)
 	for _, want := range []string{
 		"| Config | 0 | 0 | no |", "| Production | 1 | 401 | yes |",
 		"\nFAIL\n", "add the `size-exception` label", "`Size exception:`", "20 characters",
@@ -138,5 +143,37 @@ func TestRenderFailure(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("report does not contain %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "Binary files not counted:") {
+		t.Errorf("report includes an empty binary section:\n%s", got)
+	}
+}
+
+func TestRenderSkippedBinary(t *testing.T) {
+	t.Parallel()
+
+	result := inspection{skippedBinary: []string{"z.png", "a`<br>\n\x1b\xff.png"}}
+	got := renderReport(result, "PASS", true)
+	want := "| Production | 0 | 0 | yes |\n\nBinary files not counted:\n\n" +
+		"- `a\\x60<br>\\n\\x1b\\xff.png`\n- `z.png`\n\nPASS\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("report = %q, want suffix %q", got, want)
+	}
+}
+
+func TestRenderSkippedBinaryCap(t *testing.T) {
+	t.Parallel()
+
+	var result inspection
+	for i := 52; i > 0; i-- {
+		result.skippedBinary = append(result.skippedBinary, fmt.Sprintf("image-%02d.png", i))
+	}
+	got := renderReport(result, "PASS", true)
+	if count := strings.Count(got, "\n- `"); count != 50 {
+		t.Errorf("report lists %d binary files, want 50", count)
+	}
+	if !strings.Contains(got, "- `image-50.png`\n- and 2 more\n") ||
+		strings.Contains(got, "- `image-51.png`") || strings.Contains(got, "- `image-52.png`") {
+		t.Errorf("report does not keep the first 50 paths in sorted order:\n%s", got)
 	}
 }
