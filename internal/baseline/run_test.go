@@ -272,14 +272,17 @@ func TestReportCapsProblems(t *testing.T) {
 	for i := range issues {
 		issues[i] = fmt.Sprintf(`{"FromLinter":"unused","Pos":{"Filename":"f%03d.go","Line":1}}`, i)
 	}
-	args := fixtureArgs(t, checkCommand, `{"Issues":[`+strings.Join(issues, ",")+`]}`, "")
+	lintJSON := `{"Issues":[` + strings.Join(issues, ",") + `]}`
+	args := fixtureArgs(t, checkCommand, lintJSON, "unused\tzzz.go\t-\t1\n")
 	var stdout, stderr bytes.Buffer
 	if code := execute(append(args, "--adopt"), &stdout, &stderr, ""); code != 1 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 	lines := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")
-	if len(lines) != maxReported+2 || lines[maxReported] != "... and 3 more" {
-		t.Fatalf("got %d lines, tail %q", len(lines), lines[len(lines)-2:])
+	if len(lines) != maxReported+3 || lines[maxReported] != "... and 4 more" ||
+		!strings.HasPrefix(lines[maxReported+1], "Fix: ") ||
+		strings.Count(stdout.String(), "Fix: ") != 1 {
+		t.Fatalf("got %d lines, tail %q", len(lines), lines[len(lines)-3:])
 	}
 }
 
