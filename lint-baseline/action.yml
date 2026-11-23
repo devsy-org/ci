@@ -136,18 +136,21 @@ runs:
         ALLOW_NEW_MODULES: ${{ inputs.allow-new-modules }}
         MODULE_DIR: ${{ inputs.working-directory }}
       run: |
-        command -v yq >/dev/null || { echo 'lint-baseline: yq v4 is required' >&2; exit 2; }
-        refs=$(yq -r 'explode(.) | .linters.settings |
-          ((.revive.config // ""), (.goheader."template-path" // ""),
-           (.depguard.rules[]?.files[]? | select(test("^!?[$](all|test)$") | not))) | select(. != "")' -- "$CONFIG")
-        [[ -z $refs ]] ||
-          { echo 'lint-baseline: base config uses revive.config, goheader.template-path or custom depguard files' >&2; exit 2; }
-        tags=$(yq -r 'explode(.) | (.run.build-tags // []) | join(",")' -- "$CONFIG")
+        allowed='cyclop|funlen|gocognit|gocyclo|nestif|revive'
+        [[ $BASELINE_LINTERS =~ ^($allowed)(,($allowed))*$ ]] ||
+          { echo 'lint-baseline: expected comma-separated linter names in baseline-linters from the allowlist' >&2; exit 2; }
+        yq --version 2>/dev/null | grep -Eq 'github.com/mikefarah/yq/.* version v4\.' ||
+          { echo 'lint-baseline: Mike Farah yq v4 is required' >&2; exit 2; }
+        blocked=$(yq -r 'explode(.) | .. | path | map(select(tag == "!!str") | downcase) | join(".") |
+          select(test("(^|[.])plugins($|[.])|^linters[.]settings[.](custom|revive[.]config)($|[.])"))' -- "$CONFIG")
+        [[ -z $blocked ]] || { echo 'lint-baseline: base config uses revive.config, custom linters or plugins' >&2; exit 2; }
+        tags=$(yq -r 'explode(.) | (.. | select(tag == "!!map")) |= with_entries(.key |= downcase) |
+          (.run.build-tags // []) | join(",")' -- "$CONFIG")
         bash "$GITHUB_ACTION_PATH/with-lint-env.sh" bash -ec '
           args=()
           [[ -z $1 ]] || args=(-tags "$1")
           for os in linux windows darwin; do
-            GOOS=$os CGO_ENABLED=1 go list -e -json "${args[@]}" ./...
+            GOOS=$os CGO_ENABLED=1 go list -e -json -deps -test "${args[@]}" ./...
           done > "$RUNNER_TEMP/golist.json"
         ' _ "$tags"
         GIT_ATTR_SOURCE=$PR_MERGE_BASE git -c core.quotePath=true -C "$GITHUB_WORKSPACE" diff \
@@ -158,8 +161,6 @@ runs:
             --allow-generated="$ALLOW_GENERATED" --allow-new-modules="$ALLOW_NEW_MODULES" \
             --go-list "$RUNNER_TEMP/golist.json" --module-dir "$MODULE_DIR"
 
-        [[ $BASELINE_LINTERS =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] ||
-          { printf 'lint-baseline: expected comma-separated linter names in baseline-linters\n' >&2; exit 2; }
         probe=$(mktemp -d /tmp/lint-baseline.XXXXXX)
         trap 'rm -rf -- "$probe"' EXIT
         cp -- "$CONFIG" "$probe/${CONFIG##*/}"

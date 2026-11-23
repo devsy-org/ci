@@ -88,10 +88,9 @@ it with that merge base. Both sides need a `go.mod`; lint uses the highest
 Go version named by their `go` and `toolchain` directives.
 It replaces the checkout's `.golangci.yaml` with the merge base copy
 before linting. The config must already exist at the merge base. The action
-rejects file references in `revive.config` and `goheader.template-path`,
-and supports only `$all` and `$test` (including negation) in depguard `files`.
-That keeps changes to files in the checkout from changing the lint policy. The
-action checks directives first, then probes known violations with the
+rejects `revive.config`, custom linters, and plugin keys. It passes only
+allowlisted linters to `--enable-only`, so goheader, depguard, and gocritic
+cannot run through this action. It checks directives, then probes known violations with the
 base config. The probe fails if the config turns off a limit or drops
 findings that share a line. Next it checks `.lint-baseline` against
 `baseline-linters`, which defaults to `cyclop,funlen,gocognit,gocyclo,nestif,revive`.
@@ -107,13 +106,16 @@ that suppress guarded linters. The defaults are `cyclop`, `funlen`,
 It also rejects new Go generated-code headers and added code in generated
 files because golangci-lint skips those files by default. Set
 `allow-generated: "true"` to allow both.
-New `go.mod` and `go.work` files and added local `replace` directives need
-`allow-new-modules: "true"`. The action rejects added symlinks.
+New `go.mod` and `go.work` files, local `go.mod` replacements, and additions
+to `go.work` `use` or `replace` directives need `allow-new-modules: "true"`.
+The action rejects added symlinks.
 The action also rejects new line directives and build constraints that
 mention the `ignore` tag.
-The action checks whether changed Go files in `working-directory` load on
-Linux, Windows, or macOS with cgo and the base config's build tags. It accepts
-unimported `testdata` files. The Linux lint job does not lint files that only
+The action checks whether changed Go files in the selected module load on
+Linux, Windows, or macOS with cgo and the base config's build tags. It skips
+files whose nearest `go.mod` belongs to a different module. To check a
+nested module, run the action with `working-directory` set to that module.
+It accepts unimported `testdata` files. The Linux lint job does not lint files that only
 load on Windows or macOS.
 
 Set `working-directory` for a Go module outside the repo root. Set `config`
