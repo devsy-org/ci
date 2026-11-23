@@ -93,11 +93,33 @@ func TestVerdict(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			passed, message := verdict(tc.lines, 400, tc.exception)
-			if passed != tc.passed || message != tc.message {
-				t.Errorf("verdict = %t, %q; want %t, %q", passed, message, tc.passed, tc.message)
+			passed, message, err := verdict(tc.lines, 400, func() (bool, error) {
+				return tc.exception, nil
+			})
+			if err != nil || passed != tc.passed || message != tc.message {
+				t.Errorf(
+					"verdict = %t, %q, %v; want %t, %q",
+					passed,
+					message,
+					err,
+					tc.passed,
+					tc.message,
+				)
 			}
 		})
+	}
+}
+
+func TestVerdictUnreadableEvent(t *testing.T) {
+	t.Parallel()
+	unreadable := errors.New("unreadable")
+	read := func() (bool, error) { return false, unreadable }
+	passed, _, err := verdict(400, 400, read)
+	if err != nil || !passed {
+		t.Errorf("at limit: passed = %t, error = %v; want pass without reading event", passed, err)
+	}
+	if _, _, err := verdict(401, 400, read); !errors.Is(err, unreadable) {
+		t.Errorf("above limit: error = %v; want unreadable event error", err)
 	}
 }
 

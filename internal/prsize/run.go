@@ -31,11 +31,12 @@ func run(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	exception, err := readException(os.Getenv("GITHUB_EVENT_PATH"), os.ReadFile)
+	passed, message, err := verdict(result[production].lines, opts.Limit, func() (bool, error) {
+		return readException(os.Getenv("GITHUB_EVENT_PATH"), os.ReadFile)
+	})
 	if err != nil {
 		return 2, err
 	}
-	passed, message := verdict(result[production].lines, opts.Limit, exception)
 	report := renderReport(result, message, passed)
 	if _, err := os.Stdout.WriteString(report); err != nil {
 		return 2, fmt.Errorf("write size report: %w", err)

@@ -54,16 +54,19 @@ func hasReason(body string) bool {
 	return false
 }
 
-func verdict(lines, limit int, exception bool) (bool, string) {
+func verdict(lines, limit int, exception func() (bool, error)) (bool, string, error) {
 	count := fmt.Sprintf("%d production lines (limit %d)", lines, limit)
-	switch {
-	case lines <= limit:
-		return true, "PASS: " + count + "."
-	case exception:
-		return true, "PASS: " + count + ", size exception accepted."
-	default:
-		return false, "FAIL: " + count + "."
+	if lines <= limit {
+		return true, "PASS: " + count + ".", nil
 	}
+	allowed, err := exception()
+	if err != nil {
+		return false, "", err
+	}
+	if allowed {
+		return true, "PASS: " + count + ", size exception accepted.", nil
+	}
+	return false, "FAIL: " + count + ".", nil
 }
 
 func renderReport(result totals, message string, passed bool) string {

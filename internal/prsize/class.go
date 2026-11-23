@@ -1,6 +1,8 @@
 package prsize
 
 import (
+	"go/scanner"
+	"go/token"
 	"path"
 	"slices"
 	"strings"
@@ -20,11 +22,11 @@ func classify(name, content string) class {
 	base, ext := path.Base(name), path.Ext(name)
 	root, _, nested := strings.Cut(name, "/")
 	switch {
-	case generatedName(base) || hasGeneratedHeader(content):
+	case generatedName(base), ext == ".go" && hasGeneratedHeader(content):
 		return generated
 	case testPath(name):
 		return tests
-	case slices.Contains([]string{".md", ".mdx"}, ext) || slices.Contains([]string{"docs", "sites"}, root):
+	case docPath(ext, root):
 		return docs
 	case configPath(name, root, ext, nested):
 		return config
@@ -43,15 +45,31 @@ func generatedName(base string) bool {
 }
 
 func hasGeneratedHeader(content string) bool {
-	for i := 0; i < 40 && content != ""; i++ {
-		line, tail, _ := strings.Cut(content, "\n")
-		rest, found := strings.CutPrefix(line, "// Code generated ")
-		if found && strings.HasSuffix(strings.TrimSuffix(rest, "\r"), " DO NOT EDIT.") {
-			return true
+	var scan scanner.Scanner
+	file := token.NewFileSet().AddFile("", -1, len(content))
+	scan.Init(file, []byte(content), nil, scanner.ScanComments)
+	marked := false
+	for {
+		pos, kind, _ := scan.Scan()
+		if kind != token.COMMENT {
+			return marked && kind == token.PACKAGE
 		}
-		content = tail
+		p := file.PositionFor(pos, false)
+		if p.Line <= 40 && p.Column == 1 && generatedLine(content[p.Offset:]) {
+			marked = true
+		}
 	}
-	return false
+}
+
+func generatedLine(content string) bool {
+	line, _, _ := strings.Cut(content, "\n")
+	rest, found := strings.CutPrefix(line, "// Code generated ")
+	return found && strings.HasSuffix(strings.TrimSuffix(rest, "\r"), " DO NOT EDIT.")
+}
+
+func docPath(ext, root string) bool {
+	return slices.Contains([]string{".md", ".mdx"}, ext) ||
+		slices.Contains([]string{"docs", "sites"}, root)
 }
 
 func testPath(name string) bool {
