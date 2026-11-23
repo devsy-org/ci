@@ -215,6 +215,16 @@ func TestDirectiveTestdataModule(t *testing.T) {
 		moduleDir,
 	)
 	assertDirectives(t, input, want+failed, 1)
+
+	input.args[len(input.args)-1] = emptyList
+	if err := os.MkdirAll(filepath.Join(root, "notes", "go.work"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	assertDirectives(t, input, passed, 0)
+
+	workspace := "go 1.26\n\nuse ../" + moduleDir + "\n"
+	directiveFixture(t, root, "tools/go.work", workspace)
+	assertDirectives(t, input, want+failed, 1)
 }
 
 func TestDirectiveAddedSymlink(t *testing.T) {

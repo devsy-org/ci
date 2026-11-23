@@ -123,7 +123,8 @@ with several modules, either run the action once per module with
 `other-modules: skip`, or keep the default to reject changes outside the
 selected module.
 It accepts unimported `testdata` files, including files in fixture modules
-with no packages in the Go package list. The Linux lint job does not lint
+with no packages in the Go package list, unless the repository contains a
+`go.work` file. The Linux lint job does not lint
 files that only load on Windows or macOS.
 
 The full-tree dead-code check runs last. It fails on any `unused` or

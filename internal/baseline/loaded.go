@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,7 +20,15 @@ type loadedGo struct {
 	files, allowed   map[string]bool
 	listedModules    map[string]bool
 	imports          map[packageImport]bool
+	workspace        *workspaceSearch
 	skipOtherModules bool
+}
+
+// workspaceSearch remembers whether the tree has a go.work, so the walk runs
+// at most once per check.
+type workspaceSearch struct {
+	done, found bool
+	err         error
 }
 
 type packageImport struct{ importer, imported string }
@@ -59,6 +68,7 @@ func readLoaded(tree *os.Root, rules directiveRules) (loadedGo, error) {
 	loaded.files, loaded.allowed = map[string]bool{}, map[string]bool{}
 	loaded.listedModules = map[string]bool{}
 	loaded.imports = map[packageImport]bool{}
+	loaded.workspace = &workspaceSearch{}
 	return loaded, errors.Join(loaded.decode(file), file.Close())
 }
 
@@ -163,19 +173,65 @@ func (loaded loadedGo) otherModuleReason(dir string) (string, error) {
 	if loaded.skipOtherModules {
 		return "", nil
 	}
-	if loaded.listedModules != nil && isTestdataPath(dir) {
-		physical, err := physicalPath(filepath.Join(loaded.root, dir))
-		if err != nil {
-			return "", fmt.Errorf("resolve testdata module directory: %w", err)
-		}
-		if !loaded.listedModules[physical] {
-			return "", nil
-		}
+	exempt, err := loaded.unimportedTestdata(dir)
+	if err != nil || exempt {
+		return "", err
 	}
 	return fmt.Sprintf(
 		"belongs to module %q, which this run does not lint",
 		filepath.ToSlash(dir),
 	), nil
+}
+
+// unimportedTestdata reports a testdata module that no listed package belongs
+// to. go list runs with GOWORK=off, so a go.work anywhere in the repo could
+// build such a module unseen; any go.work turns the exemption off.
+func (loaded loadedGo) unimportedTestdata(dir string) (bool, error) {
+	if loaded.listedModules == nil || !isTestdataPath(dir) {
+		return false, nil
+	}
+	workspace, err := loaded.hasWorkspace()
+	if err != nil || workspace {
+		return false, err
+	}
+	physical, err := physicalPath(filepath.Join(loaded.root, dir))
+	if err != nil {
+		return false, fmt.Errorf("resolve testdata module directory: %w", err)
+	}
+	return !loaded.listedModules[physical], nil
+}
+
+var errWorkspaceFound = errors.New("go.work found")
+
+func (loaded loadedGo) hasWorkspace() (bool, error) {
+	search := loaded.workspace
+	if !search.done {
+		search.found, search.err = hasWorkspace(loaded.tree)
+		search.done = true
+	}
+	return search.found, search.err
+}
+
+func hasWorkspace(root *os.Root) (bool, error) {
+	err := fs.WalkDir(root.FS(), ".", func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Name() == "go.work" && !entry.IsDir() {
+			return errWorkspaceFound
+		}
+		if entry.IsDir() && entry.Name() == ".git" {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if errors.Is(err, errWorkspaceFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("find go.work: %w", err)
+	}
+	return false, nil
 }
 
 func isTestdataPath(name string) bool {
