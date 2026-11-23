@@ -85,14 +85,57 @@ func TestInspectMissingBase(t *testing.T) {
 	t.Parallel()
 
 	missing := errors.New("no such ref")
+	const ref = "refs/remotes/origin/main"
 	_, err := inspect(func(args ...string) (string, error) {
-		if !reflect.DeepEqual(args, []string{"merge-base", "origin/main", "HEAD"}) {
+		if !reflect.DeepEqual(args, []string{"show-ref", "--verify", "--hash", ref}) {
 			t.Fatalf("unexpected Git arguments: %q", args)
 		}
 		return "", missing
 	}, "main")
-	if !errors.Is(err, missing) || !strings.Contains(err.Error(), "origin/main") {
-		t.Errorf("inspect = %v, want missing origin/main error", err)
+	if !errors.Is(err, missing) || !strings.Contains(err.Error(), ref) {
+		t.Errorf("inspect = %v, want missing %s error", err, ref)
+	}
+}
+
+func TestInspectBaseWithSameNamedTag(t *testing.T) {
+	t.Parallel()
+	git, dir := initFixture(t)
+	base := commitBase(t, git)
+	writeFixture(t, dir, "payload.txt", strings.Repeat("added line\n", 401))
+	gitOK(t, git, "add", ".")
+	head := commitFixture(t, git, base)
+	gitOK(t, git, "update-ref", "refs/tags/origin/main", head)
+
+	got, err := inspect(git, "main")
+	want := totals{production: {files: 1, lines: 401}}
+	if err != nil || got != want {
+		t.Errorf("inspect = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+func TestRunMissingRemoteWithSameNamedTag(t *testing.T) {
+	t.Parallel()
+	git, dir := initFixture(t)
+	head := commitFixture(t, git, "")
+	gitOK(t, git, "update-ref", "refs/tags/origin/main", head)
+
+	if got := Run(t.Context(), Options{BaseRef: "main", Repo: dir, Limit: 400}, 0); got != 2 {
+		t.Errorf("Run = %d, want exit 2 when only the tag exists", got)
+	}
+}
+
+func TestInspectPathNamedLikeRevisionRange(t *testing.T) {
+	t.Parallel()
+	git, dir := initFixture(t)
+	base := commitBase(t, git)
+	writeFixture(t, dir, base+"...HEAD", "added line\n")
+	gitOK(t, git, "add", ".")
+	commitFixture(t, git, base)
+
+	got, err := inspect(git, "main")
+	want := totals{production: {files: 1, lines: 1}}
+	if err != nil || got != want {
+		t.Errorf("inspect = %+v, %v; want %+v", got, err, want)
 	}
 }
 

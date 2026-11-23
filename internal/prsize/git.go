@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const headRev = "HEAD"
+
 type gitFunc func(...string) (string, error)
 
 type totals [production + 1]struct {
@@ -31,19 +33,22 @@ func gitRunner(ctx context.Context, repo string) gitFunc {
 }
 
 func inspect(git gitFunc, baseRef string) (totals, error) {
-	ref := "origin/" + baseRef
-	base, err := git("merge-base", ref, "HEAD")
+	ref := "refs/remotes/origin/" + baseRef
+	remote, err := git("show-ref", "--verify", "--hash", ref)
+	if err != nil {
+		return totals{}, fmt.Errorf("remote-tracking ref %s unavailable: %w", ref, err)
+	}
+	base, err := git("merge-base", strings.TrimSpace(remote), headRev)
 	if err != nil {
 		return totals{}, fmt.Errorf("merge base for %s unavailable; check local ref: %w", ref, err)
 	}
 	base = strings.TrimSpace(base)
 	diff := []string{"--attr-source=" + base, "diff", "--no-ext-diff", "--no-textconv", "-z", "-M"}
-	revision := base + "...HEAD"
-	rawStats, err := git(append(diff, "--numstat", revision)...)
+	rawStats, err := git(append(diff, "--numstat", base, headRev, "--")...)
 	if err != nil {
 		return totals{}, err
 	}
-	rawStatus, err := git(append(diff, "--name-status", revision)...)
+	rawStatus, err := git(append(diff, "--name-status", base, headRev, "--")...)
 	if err != nil {
 		return totals{}, err
 	}
@@ -125,7 +130,7 @@ func (c change) classify(git gitFunc, base, status string) (class, error) {
 	if status == "D" {
 		return classify(c.name, ""), nil
 	}
-	dest, err := classifyAt(git, "HEAD", c.name)
+	dest, err := classifyAt(git, headRev, c.name)
 	if err != nil || dest == production || status == "R100" || !strings.HasPrefix(status, "R") {
 		return dest, err
 	}
