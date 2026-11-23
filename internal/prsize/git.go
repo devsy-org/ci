@@ -63,15 +63,16 @@ func tally(git gitFunc, base, raw string, statuses map[string]string) (totals, e
 		}
 		fields = remaining
 		status := statuses[change.name]
+		if err := change.resolveLines(git, status); err != nil {
+			return totals{}, err
+		}
 		kind, err := change.classify(git, base, status)
 		if err != nil {
 			return totals{}, err
 		}
 		bucket := &result[kind]
 		bucket.files++
-		if status != "D" && status != "R100" {
-			bucket.lines += change.lines
-		}
+		bucket.lines += change.lines
 	}
 	return result, nil
 }
@@ -80,6 +81,11 @@ func classifyAt(git gitFunc, rev, name string) (class, error) {
 	if path.Ext(name) != ".go" || generatedName(path.Base(name)) {
 		return classify(name, ""), nil
 	}
+	content, err := readBlob(git, rev, name)
+	return classify(name, content), err
+}
+
+func readBlob(git gitFunc, rev, name string) (string, error) {
 	content, err := git("cat-file", "blob", rev+":"+name)
 	if err != nil {
 		entry, _ := git("ls-tree", rev, "--", ":(literal)"+name)
@@ -87,7 +93,7 @@ func classifyAt(git gitFunc, rev, name string) (class, error) {
 			err = nil
 		}
 	}
-	return classify(name, content), err
+	return content, err
 }
 
 func diffFields(raw string) []string {
@@ -119,14 +125,58 @@ type change struct {
 	name   string
 	source string
 	lines  int
+	binary bool
+}
+
+func (c *change) resolveLines(git gitFunc, status string) error {
+	switch {
+	case status == "D":
+		c.lines = 0
+	case c.binary && !knownBinary(c.name):
+		content, err := readBlob(git, headRev, c.name)
+		if err != nil {
+			return err
+		}
+		c.lines = max(1, strings.Count(content, "\n"))
+	}
+	return nil
+}
+
+func knownBinary(name string) bool {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".png",
+		".jpg",
+		".jpeg",
+		".gif",
+		".ico",
+		".webp",
+		".pdf",
+		".woff",
+		".woff2",
+		".ttf",
+		".otf",
+		".zip",
+		".gz",
+		".tgz",
+		".jar",
+		".exe",
+		".dll",
+		".so",
+		".dylib",
+		".wasm",
+		".bin":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c change) classify(git gitFunc, base, status string) (class, error) {
 	if status == "D" {
-		return classify(c.name, ""), nil
+		return classifyAt(git, base, c.name)
 	}
 	dest, err := classifyAt(git, headRev, c.name)
-	if err != nil || dest == production || status == "R100" || !strings.HasPrefix(status, "R") {
+	if err != nil || dest == production || c.lines == 0 || !strings.HasPrefix(status, "R") {
 		return dest, err
 	}
 	source, err := classifyAt(git, base, c.source)
@@ -149,6 +199,7 @@ func parseChange(fields []string) (change, []string, error) {
 		c.source, c.name, rest = rest[0], rest[1], rest[2:]
 	}
 	if parts[0] == "-" && parts[1] == "-" {
+		c.binary = true
 		return c, rest, nil
 	}
 	added, addErr := strconv.Atoi(parts[0])
