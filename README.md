@@ -100,11 +100,13 @@ current findings. Once the file is on the base branch, later PRs can only
 shrink it. The directive check rejects added bare `//nolint` directives and ones
 that suppress guarded linters. The defaults are `cyclop`, `funlen`,
 `gocognit`, `gocyclo`, `nestif`, `maintidx` and `revive`.
-It also rejects new Go generated-code headers because golangci-lint
-skips those files by default. Set `allow-generated: "true"` to allow them.
+It also rejects new Go generated-code headers and added code in generated
+files because golangci-lint skips those files by default. Set
+`allow-generated: "true"` to allow both.
 New `go.mod` and `go.work` files need `allow-new-modules: "true"`.
 The action also rejects new line directives and build constraints that
 mention the `ignore` tag.
+The action accepts files loaded only on Windows or macOS, but the Linux lint job does not lint them.
 
 The full-tree check fails on any `unused` or `unparam` finding; set
 `dead-code: "false"` while the baseline still lists these findings, since

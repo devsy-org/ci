@@ -23,7 +23,7 @@ inputs:
     description: Comma-separated linters that new nolint directives may not suppress.
     default: cyclop,funlen,gocognit,gocyclo,nestif,maintidx,revive
   allow-generated:
-    description: Allow new Go generated-code headers.
+    description: Allow new generated-code headers and additions to generated files.
     default: "false"
   allow-new-modules:
     description: Allow new go.mod and go.work files.
@@ -54,9 +54,6 @@ runs:
         BASE_REF: ${{ inputs.base-ref }}
         BASELINE: ${{ inputs.baseline }}
         CONFIG: ${{ inputs.config }}
-        GUARDED_LINTERS: ${{ inputs.guarded-linters }}
-        ALLOW_GENERATED: ${{ inputs.allow-generated }}
-        ALLOW_NEW_MODULES: ${{ inputs.allow-new-modules }}
         LINT_DIRECTORY: ${{ inputs.working-directory }}
         GOFLAGS: -mod=readonly
         GOTOOLCHAIN: local
@@ -105,13 +102,6 @@ runs:
           found_baseline=true
         fi
 
-        GIT_ATTR_SOURCE=$merge_base git -c core.quotePath=true -C "$workspace" diff \
-          --no-ext-diff --no-textconv --no-color --no-relative --no-renames --text \
-          --src-prefix=a/ --dst-prefix=b/ --unified=0 --inter-hunk-context=0 \
-          "$merge_base...HEAD" -- '*.go' ':(glob)**/go.mod' ':(glob)**/go.work' |
-          "$RUNNER_TEMP/lint-baseline" directives --root "$workspace" --guarded "$GUARDED_LINTERS" \
-            --allow-generated="$ALLOW_GENERATED" --allow-new-modules="$ALLOW_NEW_MODULES"
-
         mod_entry=$(git --literal-pathspecs ls-tree --full-tree "$merge_base" -- "${prefix}go.mod")
         regular_blob "$mod_entry" || fail "no regular go.mod at the merge base: ${prefix}go.mod"
         [[ -f go.mod && ! -L go.mod ]] || fail "expected a regular go.mod at HEAD"
@@ -127,8 +117,7 @@ runs:
         # Remove the checkout entry first so a PR symlink cannot redirect the write.
         rm -f -- "$CONFIG"
         git show "$merge_base:$prefix$CONFIG" > "$CONFIG"
-        printf 'go-version=%s\nhas-base-baseline=%s\n' "$version" "$found_baseline" >> "$GITHUB_OUTPUT"
-
+        printf 'go-version=%s\nhas-base-baseline=%s\nmerge-base=%s\n' "$version" "$found_baseline" "$merge_base" >> "$GITHUB_OUTPUT"
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
       with:
         go-version: ${{ steps.prepare.outputs.go-version }}
@@ -138,13 +127,27 @@ runs:
         version: ${{ inputs.golangci-lint-version }}
         install-only: true
         skip-cache: true
-    - name: Probe baseline linters
+    - name: Check directives and probe baseline linters
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         CONFIG: ${{ inputs.config }}
         BASELINE_LINTERS: ${{ inputs.baseline-linters }}
+        PR_MERGE_BASE: ${{ steps.prepare.outputs.merge-base }}
+        GUARDED_LINTERS: ${{ inputs.guarded-linters }}
+        ALLOW_GENERATED: ${{ inputs.allow-generated }}
+        ALLOW_NEW_MODULES: ${{ inputs.allow-new-modules }}
       run: |
+        bash "$GITHUB_ACTION_PATH/with-lint-env.sh" bash -ec '
+          for os in linux windows darwin; do GOOS=$os go list -e -json ./...; done > "$RUNNER_TEMP/golist.json"
+        '
+        GIT_ATTR_SOURCE=$PR_MERGE_BASE git -c core.quotePath=true -C "$GITHUB_WORKSPACE" diff \
+          --no-ext-diff --no-textconv --no-color --no-relative --no-renames --text \
+          --src-prefix=a/ --dst-prefix=b/ --unified=0 --inter-hunk-context=0 \
+          "$PR_MERGE_BASE...HEAD" -- '*.go' ':(glob)**/go.mod' ':(glob)**/go.work' |
+          "$RUNNER_TEMP/lint-baseline" directives --root "$GITHUB_WORKSPACE" --guarded "$GUARDED_LINTERS" \
+            --allow-generated="$ALLOW_GENERATED" --allow-new-modules="$ALLOW_NEW_MODULES" --go-list "$RUNNER_TEMP/golist.json"
+
         [[ $BASELINE_LINTERS =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] ||
           { printf 'lint-baseline: expected comma-separated linter names in baseline-linters\n' >&2; exit 2; }
         probe=$(mktemp -d /tmp/lint-baseline.XXXXXX)
@@ -190,14 +193,8 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         CONFIG: ${{ inputs.config }}
-        GOFLAGS: -mod=readonly
-        GOTOOLCHAIN: local
-        GOWORK: "off"
       run: |
-        token=$(openssl rand -hex 16)
-        printf '::stop-commands::%s\n' "$token"
-        trap 'printf "\n::%s::\n" "$token"' EXIT
-        # golangci-lint cleans "./" from paths, so prefix each log line too.
-        golangci-lint run --config "$CONFIG" --enable-only unused,unparam \
-          --allow-parallel-runners --path-prefix=./ ./... 2>&1 |
-          tr '\r' ' ' | sed 's/^/lint:dead: /'
+        bash "$GITHUB_ACTION_PATH/with-lint-env.sh" bash -o pipefail -c '
+          golangci-lint run --config "$CONFIG" --enable-only unused,unparam --allow-parallel-runners \
+            --path-prefix=./ ./... 2>&1 | tr "\r" " " | sed "s/^/lint:dead: /"
+        '
