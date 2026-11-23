@@ -64,7 +64,8 @@ adds findings or leaves stale entries in its baseline. Run it in its own
 job on `pull_request` with a read-only token and no secrets. Check out the
 caller repo at the default PR merge ref with `fetch-depth: 0`; the action
 does not fetch refs.
-It needs Git 2.41 or later. Replace `<sha>` with the commit SHA to pin.
+It needs Git 2.41 or later and Mike Farah's yq v4, which `ubuntu-latest`
+includes. Replace `<sha>` with the commit SHA to pin.
 
 ```yaml
 on:
@@ -86,14 +87,17 @@ The action checks that `HEAD` includes `origin/<base-ref>` and compares
 it with that merge base. Both sides need a `go.mod`; lint uses the highest
 Go version named by their `go` and `toolchain` directives.
 It replaces the checkout's `.golangci.yaml` with the merge base copy
-before linting. The config must already exist at the merge base. The
+before linting. The config must already exist at the merge base. The action
+rejects file references in `revive.config` and `goheader.template-path`,
+and supports only `$all` and `$test` (including negation) in depguard `files`.
+That keeps changes to files in the checkout from changing the lint policy. The
 action checks directives first, then probes known violations with the
 base config. The probe fails if the config turns off a limit or drops
 findings that share a line. Next it checks `.lint-baseline` against
 `baseline-linters`, which defaults to `cyclop,funlen,gocognit,gocyclo,nestif,revive`.
 These function-level linters report on declaration lines, so a changed-lines
 check can miss growth in a body or multiline signature. Other linters stay
-on the caller's changed-lines check. The full-tree dead-code check runs last.
+on the caller's changed-lines check.
 
 If the base has no `.lint-baseline`, the PR can add one that matches the
 current findings. Once the file is on the base branch, later PRs can only
@@ -103,20 +107,14 @@ that suppress guarded linters. The defaults are `cyclop`, `funlen`,
 It also rejects new Go generated-code headers and added code in generated
 files because golangci-lint skips those files by default. Set
 `allow-generated: "true"` to allow both.
-New `go.mod` and `go.work` files need `allow-new-modules: "true"`.
+New `go.mod` and `go.work` files and added local `replace` directives need
+`allow-new-modules: "true"`. The action rejects added symlinks.
 The action also rejects new line directives and build constraints that
 mention the `ignore` tag.
-The action accepts files loaded only on Windows or macOS, but the Linux lint job does not lint them.
-
-The full-tree check fails on any `unused` or `unparam` finding; set
-`dead-code: "false"` while the baseline still lists these findings, since
-the baseline check already rejects new ones. Run the same command on
-pushes to `main`, since the action needs a PR merge base:
-
-```sh
-golangci-lint run --config .golangci.yaml --enable-only unused,unparam \
-  --allow-parallel-runners --path-prefix=./ ./...
-```
+The action checks whether changed Go files in `working-directory` load on
+Linux, Windows, or macOS with cgo and the base config's build tags. It accepts
+unimported `testdata` files. The Linux lint job does not lint files that only
+load on Windows or macOS.
 
 Set `working-directory` for a Go module outside the repo root. Set `config`
 and `baseline` to paths relative to that directory to use different names.
