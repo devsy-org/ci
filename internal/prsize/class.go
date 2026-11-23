@@ -55,7 +55,7 @@ func hasGeneratedHeader(content string) bool {
 			return marked && kind == token.PACKAGE
 		}
 		p := file.PositionFor(pos, false)
-		if p.Line <= 40 && p.Column == 1 && generatedLine(content[p.Offset:]) {
+		if p.Column == 1 && generatedLine(content[p.Offset:]) {
 			marked = true
 		}
 	}
@@ -76,7 +76,7 @@ func testPath(name string) bool {
 	if strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, ".test.ts") {
 		return true
 	}
-	for segment := range strings.SplitSeq(name, "/") {
+	for segment := range strings.SplitSeq(path.Dir(name), "/") {
 		if slices.Contains([]string{"__tests__", "e2e", "testdata", "test"}, segment) {
 			return true
 		}

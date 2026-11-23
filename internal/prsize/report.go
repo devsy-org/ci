@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode/utf8"
+	"unicode"
 )
 
 const (
@@ -52,11 +52,21 @@ func readException(path string, read func(string) ([]byte, error)) (bool, error)
 func hasReason(body string) bool {
 	for line := range strings.SplitSeq(body, "\n") {
 		reason, found := strings.CutPrefix(line, exceptionPrefix)
-		if found && utf8.RuneCountInString(strings.TrimSpace(reason)) >= exceptionLength {
+		if found && printable(strings.TrimSpace(reason)) >= exceptionLength {
 			return true
 		}
 	}
 	return false
+}
+
+func printable(text string) int {
+	count := 0
+	for _, char := range text {
+		if unicode.IsPrint(char) {
+			count++
+		}
+	}
+	return count
 }
 
 func verdict(lines, limit int, exception func() (bool, error)) (bool, string, error) {
