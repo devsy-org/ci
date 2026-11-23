@@ -26,6 +26,10 @@ func TestReadException(t *testing.T) {
 			payload: eventStart + `"Size exception:       0123456789012345678  "}}`,
 		},
 		{
+			name:    "invisible characters",
+			payload: eventStart + `"Size exception: abc` + strings.Repeat(`\u200b`, 20) + `def"}}`,
+		},
+		{
 			name:    "must start line",
 			payload: eventStart + `" Size exception: 01234567890123456789"}}`,
 		},

@@ -14,11 +14,6 @@ const headRev = "HEAD"
 
 type gitFunc func(...string) (string, error)
 
-type totals [production + 1]struct {
-	files int
-	lines int
-}
-
 func gitRunner(ctx context.Context, repo string) gitFunc {
 	return func(args ...string) (string, error) {
 		//nolint:gosec // Invoke Git directly with arguments built for specific subcommands.
