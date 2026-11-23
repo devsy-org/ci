@@ -24,8 +24,13 @@ const (
 
 // Run reports lint baseline violations as exit 1, and usage or I/O errors as exit 2.
 func Run(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 0 && args[0] == directivesCommand {
-		return executeDirectives(args[1:], os.Stdin, stdout, stderr)
+	if len(args) != 0 {
+		switch args[0] {
+		case directivesCommand:
+			return executeDirectives(args[1:], os.Stdin, stdout, stderr)
+		case configCheckCommand:
+			return executeConfigCheck(args[1:], stdout, stderr)
+		}
 	}
 	return execute(args, stdout, stderr, os.Getenv("GITHUB_STEP_SUMMARY"))
 }
