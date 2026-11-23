@@ -271,6 +271,7 @@ func TestInspectNULFiles(t *testing.T) {
 		{"text with NUL", "payload.py", "\x00" + strings.Repeat("pass\n", 3000), 3000},
 		{"no newline", "one.py", "\x00pass", 1},
 		{"known binary", "image.PNG", "\x00" + strings.Repeat("pixels\n", 10), 0},
+		{"known archive", "archive.tar", "\x00member\n", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -287,6 +288,56 @@ func TestInspectNULFiles(t *testing.T) {
 				t.Errorf("inspect = %+v, %v; want %+v", got, err, want)
 			}
 		})
+	}
+}
+
+func TestInspectNULRename(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		dest  string
+		added string
+		lines int
+	}{
+		{name: "unchanged", dest: "nul-after.txt"},
+		{name: "edited into docs", dest: "nul-after.md", added: "added\n", lines: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			git, dir := initFixture(t)
+			const source = "nul-before.txt"
+			before := "\x00" + strings.Repeat("original\n", 600)
+			writeFixture(t, dir, source, before)
+			base := commitBase(t, git)
+			gitOK(t, git, "mv", source, tc.dest)
+			writeFixture(t, dir, tc.dest, before+tc.added)
+			gitOK(t, git, "add", ".")
+			commitFixture(t, git, base)
+
+			got, err := inspect(git, "main")
+			want := totals{production: {files: 1, lines: tc.lines}}
+			if err != nil || got != want {
+				t.Errorf("inspect = %+v, %v; want %+v", got, err, want)
+			}
+		})
+	}
+}
+
+func TestInspectNULReplacement(t *testing.T) {
+	t.Parallel()
+	git, dir := initFixture(t)
+	const name = "[replace].txt"
+	writeFixture(t, dir, name, strings.Repeat("-- old\n", 600))
+	base := commitBase(t, git)
+	writeFixture(t, dir, name, "++ new\x00\n")
+	gitOK(t, git, "add", ".")
+	commitFixture(t, git, base)
+
+	got, err := inspect(git, "main")
+	want := totals{production: {files: 1, lines: 601}}
+	if err != nil || got != want {
+		t.Errorf("inspect = %+v, %v; want %+v", got, err, want)
 	}
 }
 

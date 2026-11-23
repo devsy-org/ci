@@ -63,7 +63,7 @@ func tally(git gitFunc, base, raw string, statuses map[string]string) (totals, e
 		}
 		fields = remaining
 		status := statuses[change.name]
-		if err := change.resolveLines(git, status); err != nil {
+		if err := change.resolveLines(git, base, status); err != nil {
 			return totals{}, err
 		}
 		kind, err := change.classify(git, base, status)
@@ -128,18 +128,59 @@ type change struct {
 	binary bool
 }
 
-func (c *change) resolveLines(git gitFunc, status string) error {
+func (c *change) resolveLines(git gitFunc, base, status string) error {
 	switch {
 	case status == "D":
 		c.lines = 0
 	case c.binary && !knownBinary(c.name):
-		content, err := readBlob(git, headRev, c.name)
+		patch, err := c.textPatch(git, base)
 		if err != nil {
 			return err
 		}
-		c.lines = max(1, strings.Count(content, "\n"))
+		c.lines = countPatchLines(patch)
 	}
 	return nil
+}
+
+func (c change) textPatch(git gitFunc, base string) (string, error) {
+	args := []string{
+		"--attr-source=" + base,
+		"diff",
+		"--text",
+		"--no-ext-diff",
+		"--no-textconv",
+		"--no-color",
+		"-U0",
+	}
+	if c.source != "" {
+		// Compare the reported pair without redetecting renames on a subset of paths.
+		return git(append(args, base+":"+c.source, headRev+":"+c.name, "--")...)
+	}
+	return git(
+		append(
+			args,
+			"--no-renames",
+			"--diff-filter=d",
+			base,
+			headRev,
+			"--",
+			":(literal)"+c.name,
+		)...)
+}
+
+func countPatchLines(patch string) int {
+	count, inHunk := 0, false
+	for line := range strings.SplitSeq(patch, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			inHunk = false
+		case strings.HasPrefix(line, "@@ "):
+			inHunk = true
+		case inHunk && (strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-")):
+			count++
+		}
+	}
+	return count
 }
 
 func knownBinary(name string) bool {
@@ -164,7 +205,17 @@ func knownBinary(name string) bool {
 		".so",
 		".dylib",
 		".wasm",
-		".bin":
+		".bin",
+		".a",
+		".o",
+		".class",
+		".mp3",
+		".mp4",
+		".mov",
+		".tar",
+		".xz",
+		".bz2",
+		".7z":
 		return true
 	default:
 		return false
