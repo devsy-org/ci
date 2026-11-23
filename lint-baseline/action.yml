@@ -1,0 +1,183 @@
+name: Lint Baseline
+description: Check Go lint findings against a pull request's baseline.
+inputs:
+  baseline:
+    description: Baseline path relative to the working directory.
+    default: .lint-baseline.tsv
+  config:
+    description: Golangci-lint config path relative to the working directory.
+    default: .golangci.yaml
+  base-ref:
+    description: Target branch name on origin.
+    default: ${{ github.event.pull_request.base.ref }}
+  golangci-lint-version:
+    description: Golangci-lint version to install.
+    default: v2.15.0
+  working-directory:
+    description: Directory containing the caller's go.mod.
+    default: .
+  guarded-linters:
+    description: Comma-separated linters that new nolint directives may not suppress.
+    default: cyclop,funlen,gocognit,gocyclo,nestif,maintidx,revive
+  allow-generated:
+    description: Allow new Go generated-code headers.
+    default: "false"
+  allow-new-modules:
+    description: Allow new go.mod and go.work files.
+    default: "false"
+  dead-code:
+    description: Check the whole Go module for unused code and parameters.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      with:
+        go-version-file: ${{ github.action_path }}/../go.mod
+        cache: false
+    - name: Build lint-baseline
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      env:
+        GOFLAGS: -mod=readonly
+        GOTOOLCHAIN: local
+        GOWORK: "off"
+      run: go build -o "$RUNNER_TEMP/lint-baseline" ./cmd/lint-baseline
+    - name: Prepare lint baseline
+      id: prepare
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        BASELINE: ${{ inputs.baseline }}
+        CONFIG: ${{ inputs.config }}
+        GUARDED_LINTERS: ${{ inputs.guarded-linters }}
+        ALLOW_GENERATED: ${{ inputs.allow-generated }}
+        ALLOW_NEW_MODULES: ${{ inputs.allow-new-modules }}
+        LINT_DIRECTORY: ${{ inputs.working-directory }}
+        GOFLAGS: -mod=readonly
+        GOTOOLCHAIN: local
+        GOWORK: "off"
+      run: |
+        fail() { printf 'lint-baseline: %s\n' "$1" >&2; exit 2; }
+        regular_blob() { [[ $1 == '100644 blob '* || $1 == '100755 blob '* ]]; }
+        check_directory() {
+          local dir
+          dir=$(dirname -- "$1")
+          if [[ $dir != . ]]; then
+            [[ $(cd -P -- "$dir" && pwd -P) == "$(pwd -P)/$dir" ]] ||
+              fail "expected a $2 directory without symlinks: $dir"
+          fi
+        }
+        go_versions() {
+          go mod edit -json "$1" 2>/dev/null |
+            jq -er 'select(.Go != null) | .Go, (.Toolchain // "default" | select(. != "default") | ltrimstr("go"))'
+        }
+
+        workspace=$(cd -P -- "$GITHUB_WORKSPACE" && pwd -P)
+        directory=${LINT_DIRECTORY#./}
+        directory=${directory%/}
+        expected=$workspace
+        if [[ $directory != . && -n $directory ]]; then expected=$workspace/$directory; fi
+        [[ $(pwd -P) == "$expected" ]] || fail "expected a working directory without symlinks: $LINT_DIRECTORY"
+
+        origin_target="refs/remotes/origin/$BASE_REF"
+        merge_base=$(git merge-base HEAD "$origin_target") ||
+          fail "cannot find a merge base with origin/$BASE_REF; check out with fetch-depth: 0"
+        git merge-base --is-ancestor "$origin_target" HEAD ||
+          fail "check out the default pull_request merge ref; HEAD does not include origin/$BASE_REF"
+        prefix=$(git rev-parse --show-prefix)
+        CONFIG=${CONFIG#./}
+        BASELINE=${BASELINE#./}
+        check_directory "$CONFIG" config
+        check_directory "$BASELINE" baseline
+
+        config_entry=$(git --literal-pathspecs ls-tree --full-tree "$merge_base" -- "$prefix$CONFIG")
+        regular_blob "$config_entry" ||
+          fail "no regular lint config at the merge base: $prefix$CONFIG"
+        base_entry=$(git --literal-pathspecs ls-tree --full-tree "$merge_base" -- "$prefix$BASELINE")
+        found_baseline=false
+        if [[ -n $base_entry ]]; then
+          regular_blob "$base_entry" ||
+            fail "base baseline is not a regular file: $prefix$BASELINE"
+          git show "$merge_base:$prefix$BASELINE" > "$RUNNER_TEMP/base-lint-baseline.tsv"
+          found_baseline=true
+        fi
+
+        GIT_ATTR_SOURCE=$merge_base git -c core.quotePath=true -C "$workspace" diff \
+          --no-ext-diff --no-textconv --no-color --no-relative --no-renames --text \
+          --src-prefix=a/ --dst-prefix=b/ --unified=0 --inter-hunk-context=0 \
+          "$merge_base...HEAD" -- '*.go' ':(glob)**/go.mod' ':(glob)**/go.work' |
+          "$RUNNER_TEMP/lint-baseline" directives --root "$workspace" --guarded "$GUARDED_LINTERS" \
+            --allow-generated="$ALLOW_GENERATED" --allow-new-modules="$ALLOW_NEW_MODULES"
+
+        mod_entry=$(git --literal-pathspecs ls-tree --full-tree "$merge_base" -- "${prefix}go.mod")
+        regular_blob "$mod_entry" || fail "no regular go.mod at the merge base: ${prefix}go.mod"
+        [[ -f go.mod && ! -L go.mod ]] || fail "expected a regular go.mod at HEAD"
+        git show "$merge_base:${prefix}go.mod" > "$RUNNER_TEMP/lint-base.mod"
+        version=$(
+          { go_versions "$RUNNER_TEMP/lint-base.mod" && go_versions go.mod; } |
+            LC_ALL=C sort -V | tail -n 1
+        ) || fail "cannot read Go versions from the base and PR go.mod files"
+        [[ $version =~ ^([0-9]+\.[0-9]+)(\.[0-9]+|(beta|rc)([0-9]+))?$ ]] ||
+          fail "expected an official Go release version"
+        if [[ -n ${BASH_REMATCH[3]} ]]; then
+          version=${BASH_REMATCH[1]}.0-${BASH_REMATCH[3]}.${BASH_REMATCH[4]}
+        fi
+
+        # Remove the checkout entry first so a PR symlink cannot redirect the write.
+        rm -f -- "$CONFIG"
+        git show "$merge_base:$prefix$CONFIG" > "$CONFIG"
+        printf 'go-version=%s\nhas-base-baseline=%s\n' "$version" "$found_baseline" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      with:
+        go-version: ${{ steps.prepare.outputs.go-version }}
+        cache: false
+    - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+      with:
+        version: ${{ inputs.golangci-lint-version }}
+        install-only: true
+        skip-cache: true
+    - name: Check lint baseline
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASELINE: ${{ inputs.baseline }}
+        CONFIG: ${{ inputs.config }}
+        HAS_BASE_BASELINE: ${{ steps.prepare.outputs.has-base-baseline }}
+        GOFLAGS: -mod=readonly
+        GOTOOLCHAIN: local
+        GOWORK: "off"
+      run: |
+        base_args=(--adopt)
+        if [[ $HAS_BASE_BASELINE == true ]]; then
+          base_args=(--base-baseline "$RUNNER_TEMP/base-lint-baseline.tsv")
+        fi
+        (
+          token=$(openssl rand -hex 16)
+          printf '::stop-commands::%s\n' "$token"
+          trap 'printf "\n::%s::\n" "$token"' EXIT
+          golangci-lint run --config "$CONFIG" --allow-parallel-runners --uniq-by-line=false \
+            --show-stats=false --max-same-issues=0 --max-issues-per-linter=0 --issues-exit-code=0 \
+            --output.text.path= --output.json.path="$RUNNER_TEMP/lint.json" ./...
+        )
+        "$RUNNER_TEMP/lint-baseline" check --lint-json "$RUNNER_TEMP/lint.json" \
+          --baseline "$BASELINE" "${base_args[@]}" --root .
+    - name: Check full-tree dead code
+      if: inputs.dead-code == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CONFIG: ${{ inputs.config }}
+        GOFLAGS: -mod=readonly
+        GOTOOLCHAIN: local
+        GOWORK: "off"
+      run: |
+        token=$(openssl rand -hex 16)
+        printf '::stop-commands::%s\n' "$token"
+        trap 'printf "\n::%s::\n" "$token"' EXIT
+        # golangci-lint cleans "./" from paths, so prefix each log line too.
+        golangci-lint run --config "$CONFIG" --enable-only unused,unparam \
+          --allow-parallel-runners --path-prefix=./ ./... 2>&1 |
+          tr '\r' ' ' | sed 's/^/lint:dead: /'
