@@ -4,8 +4,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"strconv"
 )
+
+const maxSourceBytes = 4 << 20
 
 type scopeCache struct {
 	root  string
@@ -35,18 +39,35 @@ func readScopes(root, file string) []funcScope {
 	if filepath.Ext(file) != ".go" || !filepath.IsLocal(file) {
 		return nil
 	}
+	path := filepath.Join(root, file)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSourceBytes {
+		return nil
+	}
 	fset := token.NewFileSet()
-	tree, err := parser.ParseFile(fset, filepath.Join(root, file), nil, parser.SkipObjectResolution)
+	tree, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
 		return nil
 	}
+	return collectScopes(fset, tree)
+}
+
+func collectScopes(fset *token.FileSet, tree *ast.File) []funcScope {
 	var scopes []funcScope
+	counts := make(map[string]int)
 	for _, decl := range tree.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok {
-			start := fset.PositionFor(fn.Pos(), false).Line
-			end := fset.PositionFor(fn.End(), false).Line
-			scopes = append(scopes, funcScope{funcName(fn), start, end})
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
 		}
+		name := funcName(fn)
+		counts[name]++
+		if count := counts[name]; count > 1 {
+			name += "#" + strconv.Itoa(count)
+		}
+		start := fset.PositionFor(fn.Pos(), false).Line
+		end := fset.PositionFor(fn.End(), false).Line
+		scopes = append(scopes, funcScope{name, start, end})
 	}
 	return scopes
 }

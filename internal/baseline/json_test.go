@@ -2,7 +2,9 @@ package baseline
 
 import (
 	"bytes"
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -34,8 +36,8 @@ func TestFromJSON(t *testing.T) {
 	const outer = "Outer"
 	const unused = "unused"
 	want := []Entry{
-		{"cyclop", source, outer, 2},
-		{"nestif", source, outer, 8},
+		{cyclop, source, outer, 2},
+		{"nestif", source, outer, 12},
 		{unused, "README.md", "-", 1},
 		{unused, "missing.go", "-", 1},
 		{unused, source, "-", 1},
@@ -63,12 +65,14 @@ func TestFromGolangCILintJSON(t *testing.T) {
 funlen:statements	big.go	Big	152
 funlen:statements	res.go	L	22
 gocognit	big.go	Big	300
-nestif	big.go	Big	6
+nestif	big.go	Big	180
 revive:argument-limit	big.go	Big	6
 revive:cognitive-complexity	big.go	Big	300
 revive:cyclomatic	big.go	Big	121
-revive:function-length	big.go	Big	272
-revive:function-length	res.go	L	22
+revive:function-length:lines	big.go	Big	272
+revive:function-length:lines	res.go	L	22
+revive:function-length:statements	big.go	Big	152
+revive:function-length:statements	res.go	L	22
 revive:function-result-limit	res.go	R	3
 revive:max-control-nesting	big.go	Big	30
 `
@@ -86,6 +90,8 @@ func TestFromJSONInvalid(t *testing.T) {
 
 	cases := []struct{ name, input, message string }{
 		{"malformed", `{"Issues":[}`, "decode lint JSON"},
+		{"missing issues", `{}`, "requires an Issues array"},
+		{"null issues", `{"Issues":null}`, "requires an Issues array"},
 		{
 			"tab in filename",
 			`{"Issues":[{"FromLinter":"unused","Pos":{"Filename":"tab\tname.go"}}]}`,
@@ -106,5 +112,89 @@ func TestFromJSONInvalid(t *testing.T) {
 				t.Errorf("FromJSON() error = %v, want %q", err, tc.message)
 			}
 		})
+	}
+}
+
+func TestFromJSONEmptyIssues(t *testing.T) {
+	t.Parallel()
+
+	got, err := FromJSON(strings.NewReader(`{"Issues":[]}`), "testdata")
+	if err != nil || len(got) != 0 {
+		t.Errorf("FromJSON() = (%v, %v), want no entries or error", got, err)
+	}
+}
+
+func TestReadIssuesSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	const report = `{"Issues":[]}`
+	if _, err := readIssues(strings.NewReader(report), int64(len(report))); err != nil {
+		t.Errorf("readIssues() at limit: %v", err)
+	}
+	_, err := readIssues(strings.NewReader(report+" "), int64(len(report)))
+	if err == nil || !strings.Contains(err.Error(), "lint JSON exceeds") {
+		t.Errorf("readIssues() above limit = %v, want size error", err)
+	}
+}
+
+func TestFromJSONPaths(t *testing.T) {
+	t.Parallel()
+
+	root, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const source = "source.go"
+	cases := []struct {
+		name, path string
+		reject     bool
+	}{
+		{"relative", "./sub/../" + source, false},
+		{"absolute in root", filepath.Join(root, source), false},
+		{"absolute outside root", filepath.Join(filepath.Dir(root), "x.go"), true},
+		{"relative outside root", "../x.go", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			const report = `{"Issues":[{"FromLinter":"unused","Pos":{"Filename":%q,"Line":15}}]}`
+			got, err := FromJSON(strings.NewReader(fmt.Sprintf(report, tc.path)), "testdata")
+			if tc.reject {
+				if err == nil || !strings.Contains(err.Error(), "not local to the lint root") {
+					t.Errorf("FromJSON() error = %v, want nonlocal path error", err)
+				}
+				return
+			}
+			want := []Entry{{"unused", source, "Outer", 1}}
+			if err != nil || !slices.Equal(got, want) {
+				t.Errorf("FromJSON() = (%v, %v), want %v", got, err, want)
+			}
+		})
+	}
+}
+
+func TestFromJSONRepeatedInit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	const source = "init.go"
+	if err := os.WriteFile(
+		filepath.Join(root, source),
+		[]byte("package p\nfunc init() {}\nfunc init() {}\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	const input = `{"Issues":[
+		{"FromLinter":"cyclop","Text":"calculated cyclomatic complexity for function init is 9, max is 8",
+			"Pos":{"Filename":"init.go","Line":3}},
+		{"FromLinter":"cyclop","Text":"calculated cyclomatic complexity for function init is 12, max is 8",
+			"Pos":{"Filename":"init.go","Line":2}}
+	]}`
+	got, err := FromJSON(strings.NewReader(input), root)
+	want := []Entry{{cyclop, source, "init", 12}, {cyclop, source, "init#2", 9}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("FromJSON() = (%v, %v), want %v", got, err, want)
 	}
 }

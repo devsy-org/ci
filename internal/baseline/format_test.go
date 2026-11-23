@@ -12,7 +12,6 @@ import (
 func TestRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	const cyclop = "cyclop"
 	const a = "a.go"
 	want := []Entry{
 		{cyclop, a, "-", 12},
@@ -50,6 +49,7 @@ func TestParseInvalid(t *testing.T) {
 	const line1 = "baseline line 1:"
 	const line2 = "baseline line 2:"
 	const four = "expected four"
+	const canonical = "canonical decimal"
 	cases := []struct {
 		name, input, line, message string
 	}{
@@ -58,6 +58,8 @@ func TestParseInvalid(t *testing.T) {
 		{"extra field", "unused\ta.go\tf\t1\textra\n", line1, four},
 		{"empty scope", "unused\ta.go\t\t1\n", line1, "must be nonempty"},
 		{"noninteger", "unused\ta.go\t-\t1.2\n", line1, "parse value"},
+		{"plus sign", "unused\ta.go\t-\t+5\n", line1, canonical},
+		{"leading zeroes", "unused\ta.go\t-\t007\n", line1, canonical},
 		{"overflow", "unused\ta.go\t-\t99999999999999999999\n", line1, "parse value"},
 		{"zero", "unused\ta.go\t-\t0\n", line1, "must be positive"},
 		{"negative", "unused\ta.go\t-\t-1\n", line1, "must be positive"},
@@ -80,6 +82,22 @@ func TestParseInvalid(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestParseSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	const suffix = "\ta.go\t-\t1\n"
+	key := strings.Repeat("x", maxBaselineBytes-len(suffix))
+	line := io.MultiReader(strings.NewReader(key), strings.NewReader(suffix))
+	if _, err := Parse(line); err != nil {
+		t.Errorf("Parse() at limit: %v", err)
+	}
+	line = io.MultiReader(strings.NewReader("x"), strings.NewReader(key), strings.NewReader(suffix))
+	_, err := Parse(line)
+	if err == nil || !strings.Contains(err.Error(), "baseline exceeds") {
+		t.Errorf("Parse() above limit = %v, want size error", err)
 	}
 }
 

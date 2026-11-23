@@ -2,21 +2,21 @@ package baseline
 
 import "testing"
 
+const cyclop = "cyclop"
+
 func TestMeasure(t *testing.T) {
 	t.Parallel()
 
 	const revive = "revive"
 	const funlen = "funlen"
-	const cyclop = "cyclop"
 	const gocognit = "gocognit"
 	const nestif = "nestif"
-	const functionLength = "revive:function-length"
 	cases := []struct {
 		name, linter, message, wantLinter string
 		wantValue                         int
 	}{
 		{
-			"cyclop",
+			cyclop,
 			cyclop,
 			"calculated cyclomatic complexity for function Big is 121, max is 8",
 			cyclop,
@@ -56,14 +56,14 @@ func TestMeasure(t *testing.T) {
 			"revive statements",
 			revive,
 			"function-length: maximum number of statements per function exceeded; max 40 but got 52",
-			functionLength,
+			"revive:function-length:statements",
 			52,
 		},
 		{
 			"revive lines",
 			revive,
 			"function-length: maximum number of lines per function exceeded; max 60 but got 70",
-			functionLength,
+			"revive:function-length:lines",
 			70,
 		},
 		{

@@ -22,7 +22,8 @@ func metricPatterns() []metricPattern {
 		{"nestif", "(?s)^`if .+` has complex nested blocks \\(complexity: (\\d+)\\)$"},
 		{"revive:argument-limit", `^maximum number of arguments` + exceeded},
 		{"revive:function-result-limit", `^maximum number of return results` + exceeded},
-		{"revive:function-length", `^maximum number of (?:statements|lines)` + exceeded},
+		{"revive:function-length:lines", `^maximum number of lines` + exceeded},
+		{"revive:function-length:statements", `^maximum number of statements` + exceeded},
 		{"revive:cognitive-complexity", `^function .+ has cognitive` + complexity},
 		{"revive:cyclomatic", `^function .+ has cyclomatic` + complexity},
 	}
@@ -53,5 +54,10 @@ func measure(patterns []metricPattern, linter, message string) (string, int) {
 }
 
 func (p metricPattern) matchesLinter(linter string) bool {
-	return p.linter == linter || (linter == "funlen" && strings.HasPrefix(p.linter, "funlen:"))
+	switch linter {
+	case "funlen", "revive:function-length":
+		return strings.HasPrefix(p.linter, linter+":")
+	default:
+		return p.linter == linter
+	}
 }
