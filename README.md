@@ -56,3 +56,71 @@ To exceed the limit, add the `size-exception` label and a line in the PR body
 starting with `Size exception:`, followed by a reason of at least 20
 printable characters after trimming spaces. Set `report-only` to `"true"` to
 show the verdict without enforcing it.
+
+## Lint baseline
+
+The `lint-baseline` action runs golangci-lint and fails when a pull request
+adds findings or leaves stale entries in its baseline. Run it in its own
+job on `pull_request` with a read-only token and no secrets. Check out the
+caller repo at the default PR merge ref with `fetch-depth: 0`; the action
+does not fetch refs.
+It needs Git 2.41 or later. Replace `<sha>` with the commit SHA to pin.
+
+```yaml
+on:
+  pull_request:
+jobs:
+  lint-baseline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: devsy-org/ci/lint-baseline@<sha>
+```
+
+The action checks that `HEAD` includes `origin/<base-ref>` and compares
+it with that merge base. Both sides need a `go.mod`; lint uses the highest
+Go version named by their `go` and `toolchain` directives.
+It replaces the checkout's `.golangci.yaml` with the merge base copy
+before linting. The config must already exist at the merge base. The action
+rejects `revive.config`, custom linters, and plugin keys. Use one YAML
+document with string keys made of ASCII letters, digits, underscores, or
+hyphens. Aliases and merge keys cannot serve as mapping keys. The action passes only
+allowlisted linters to `--enable-only`, so goheader, depguard, and gocritic
+cannot run through this action. It checks directives, then probes known violations with the
+base config. The probe fails if the config turns off a limit or drops
+findings that share a line. Next it checks `.lint-baseline` against
+`baseline-linters`, which defaults to `cyclop,funlen,gocognit,gocyclo,nestif,revive`.
+These function-level linters report on declaration lines, so a changed-lines
+check can miss growth in a body or multiline signature. Other linters stay
+on the caller's changed-lines check.
+
+If the base has no `.lint-baseline`, the PR can add one that matches the
+current findings. Once the file is on the base branch, later PRs can only
+shrink it. The directive check rejects added bare `//nolint` directives and ones
+that suppress guarded linters. The defaults are `cyclop`, `funlen`,
+`gocognit`, `gocyclo`, `nestif`, `maintidx` and `revive`.
+It also rejects new Go generated-code headers and added code in generated
+files because golangci-lint skips those files by default. Set
+`allow-generated: "true"` to allow both.
+New `go.mod` and `go.work` files, local `go.mod` replacements, and additions
+to `go.work` `use` or `replace` directives need `allow-new-modules: "true"`.
+The action rejects added symlinks.
+The action also rejects new line directives and build constraints that
+mention the `ignore` tag.
+The action checks whether changed Go files in the selected module load on
+Linux, Windows, or macOS with cgo and the base config's build tags. It skips
+files whose nearest `go.mod` belongs to a different module. To check a
+nested module, run the action with `working-directory` set to that module.
+It accepts unimported `testdata` files. The Linux lint job does not lint files that only
+load on Windows or macOS.
+
+Set `working-directory` for a Go module outside the repo root. Set `config`
+and `baseline` to paths relative to that directory to use different names.
+Use `golangci-lint-version` to override `v2.15.0` or `guarded-linters` to
+override the comma-separated list. Do not run this job on
+`pull_request_target`, which can have a write token and access to secrets.
