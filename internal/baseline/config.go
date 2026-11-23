@@ -7,13 +7,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
+	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 const configCheckCommand = "config-check"
+
+var configKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func executeConfigCheck(args []string, stdout, stderr io.Writer) int {
 	name, err := configCheckFlags(args)
@@ -106,13 +108,28 @@ func configDocument(input io.Reader) (*yaml.Node, error) {
 
 func validateYAMLKeys(node *yaml.Node) error {
 	for i, child := range node.Content {
-		if node.Kind == yaml.MappingNode && i%2 == 0 &&
-			(child.Kind != yaml.ScalarNode || child.Tag != "!!str") {
-			return fmt.Errorf("expected a string YAML mapping key at line %d", child.Line)
+		if node.Kind == yaml.MappingNode && i%2 == 0 {
+			if err := validateYAMLKey(child); err != nil {
+				return err
+			}
 		}
 		if err := validateYAMLKeys(child); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateYAMLKey(key *yaml.Node) error {
+	if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+		return fmt.Errorf("expected a string YAML mapping key at line %d", key.Line)
+	}
+	if !configKeyPattern.MatchString(key.Value) {
+		return fmt.Errorf(
+			"expected YAML mapping key to match %s at line %d",
+			configKeyPattern,
+			key.Line,
+		)
 	}
 	return nil
 }
@@ -137,7 +154,7 @@ func configMap(cfg map[string]any, prefix string) (map[string]any, error) {
 }
 
 func blockedConfigKey(prefix, key string) bool {
-	if slices.Contains(strings.Split(key, "."), "plugins") {
+	if key == "plugins" {
 		return true
 	}
 	path := prefix + key + "."

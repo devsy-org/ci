@@ -64,6 +64,25 @@ func TestConfigCheckBinaryKeys(t *testing.T) {
 	}
 }
 
+func TestConfigCheckKeySpelling(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, source string }{
+		{"long s in settings", "linters: {\u017fettings: {custom: {}}}"},
+		{"long s in custom", "linters: {settings: {cu\u017ftom: {}}}"},
+		{"long s in plugins", "other: [{plugin\u017f: null}]"},
+		{"trailing NBSP", "linters: {settings: {\"custom\u00a0\": {}}}"},
+		{"kelvin sign", "other: {\u212aey: true}"},
+		{"dotted build tags", "run.build-tags: [integration]"},
+		{"uppercase dotted build tags", "RUN.BUILD-TAGS: [integration]"},
+		{"dotted linter settings", "linters.settings: {custom: {}}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assertConfigCheck(t, tc.source, configFunlen, "expected YAML mapping key to match")
+		})
+	}
+}
+
 func assertConfigCheck(t *testing.T, source, linters, want string) {
 	t.Helper()
 	file := fixtureFile(t, t.TempDir(), "config.yaml", source)
