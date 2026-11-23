@@ -1,9 +1,44 @@
 package baseline
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestDirectiveWorkspaceEdits(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ kind, text string }{
+		{"use", "./sub"},
+		{"replace", "example.com/x => ./sub"},
+		{"replace", "example.com/x => example.com/fork v1.0.0"},
+	} {
+		for _, block := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%s/%t", tc.kind, tc.text, block), func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
+				line, added, suffix := 2, tc.kind+" "+tc.text, ""
+				source := "go 1.26.9\n"
+				if block {
+					line, added, suffix = 3, "\t"+tc.text, ")\n"
+					source += tc.kind + " (\n"
+				}
+				fixtureFile(t, root, "go.work", source+added+"\n"+suffix)
+				diff := fmt.Sprintf(
+					"--- a/go.work\n+++ b/go.work\n@@ -%d,0 +%d @@\n+%s\n",
+					line-1,
+					line,
+					added,
+				)
+				input := directiveTest{args: []string{rootFlag, root, guardFlag}, diff: diff}
+				want := fmt.Sprintf("\"go.work\" %d: adds a go.work %s directive\n", line, tc.kind)
+				assertDirectives(t, input, want+failed, 1)
+				input.args = append(input.args, "--allow-new-modules")
+				assertDirectives(t, input, passed, 0)
+			})
+		}
+	}
+}
 
 func TestDirectiveLocalReplacements(t *testing.T) {
 	t.Parallel()

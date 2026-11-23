@@ -332,7 +332,7 @@ func TestDirectiveSourceErrors(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	args := []string{rootFlag, root, guardFlag}
-	diff := addedHunk + "+contents\n"
+	diff := "--- a/new.go\n+++ b/new.go\n@@ -1,0 +2 @@\n+contents\n"
 	bad := fixtureFile(t, root, "bad.go", sourcePkg+"func\n")
 	link := filepath.Join(root, "new.go")
 	if err := os.Symlink(bad, link); err != nil {

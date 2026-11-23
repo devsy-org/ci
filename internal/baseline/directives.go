@@ -10,13 +10,17 @@ import (
 	"go/token"
 	"io"
 	"maps"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-const directivesCommand = "directives"
+const (
+	directivesCommand = "directives"
+	goMod             = "go.mod"
+)
 
 type directiveRules struct {
 	root, goList, moduleDir         string
@@ -48,7 +52,7 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 	flags := flag.NewFlagSet(directivesCommand, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&rules.root, "root", "", "destination source tree")
-	flags.StringVar(&rules.goList, "go-list", "", "go list -e -json package stream")
+	flags.StringVar(&rules.goList, "go-list", "", "go list -e -json -deps -test package stream")
 	flags.StringVar(&rules.moduleDir, "module-dir", ".", "module directory relative to root")
 	flags.BoolVar(&rules.allowGenerated, "allow-generated", false, "allow generated headers")
 	flags.BoolVar(
@@ -83,20 +87,21 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 	if err != nil {
 		return "", 0, err
 	}
-	loaded, err := readLoaded(rules)
+	root, err := os.OpenRoot(rules.root)
+	if err != nil {
+		return "", 0, fmt.Errorf("open directive root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	loaded, err := readLoaded(root, rules)
 	if err != nil {
 		return "", 0, err
 	}
 	var log strings.Builder
 	count := loaded.reportImports(&log)
 	for _, name := range slices.Sorted(maps.Keys(files)) {
-		findings, err := rules.pathFindings(name, files[name])
+		findings, err := rules.findings(name, files[name], loaded)
 		if err != nil {
 			return "", 0, fmt.Errorf("check directives in %q: %w", name, err)
-		}
-		if !files[name].symlink && loaded.rejects(name, files[name]) {
-			fmt.Fprintf(&log, "%q 1: not loaded by any GOOS build\n", name)
-			count++
 		}
 		for _, number := range slices.Sorted(maps.Keys(findings)) {
 			fmt.Fprintf(&log, "%q %d: %s\n", name, number, findings[number])
@@ -106,35 +111,52 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 	return log.String(), count, nil
 }
 
-func (rules directiveRules) pathFindings(name string, change *fileChange) (map[int]string, error) {
-	if change.symlink {
-		return map[int]string{1: "adds a symlink"}, nil
+func (r directiveRules) findings(name string, c *fileChange, l loadedGo) (map[int]string, error) {
+	link, err := addedLink(l.tree, name, c.created)
+	if err != nil || link {
+		return map[int]string{1: "adds a symlink"}, err
 	}
-	if findings := rules.newModuleFinding(name, change); findings != nil {
-		return findings, nil
+	findings, err := r.source(name, c)
+	if err != nil {
+		return nil, err
 	}
-	return rules.sourceFindings(name, change.lines)
+	rejected, err := l.rejects(name)
+	if rejected && findings[1] == "" {
+		findings[1] = "not loaded by any GOOS build"
+	}
+	return findings, err
 }
 
-func (rules directiveRules) newModuleFinding(name string, change *fileChange) map[int]string {
-	if rules.allowNewModules || !change.created {
-		return nil
+func addedLink(root *os.Root, name string, created bool) (bool, error) {
+	if !created {
+		return false, nil
 	}
-	switch path.Base(name) {
-	case "go.mod", "go.work":
-		return map[int]string{1: "new Go module or workspace file"}
+	info, err := root.Lstat(filepath.FromSlash(name))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
 	}
-	return nil
+	if err != nil {
+		return false, fmt.Errorf("stat destination: %w", err)
+	}
+	return info.Mode()&os.ModeSymlink != 0, nil
 }
 
-func (rules directiveRules) sourceFindings(name string, added addedLines) (map[int]string, error) {
-	if !rules.allowNewModules && path.Base(name) == "go.mod" && len(added) != 0 {
-		return rules.replaceFindings(name, added)
+func (r directiveRules) source(name string, change *fileChange) (map[int]string, error) {
+	if !r.allowNewModules {
+		switch path.Base(name) {
+		case goMod, "go.work":
+			if change.created {
+				return map[int]string{1: "new Go module or workspace file"}, nil
+			}
+			if len(change.lines) != 0 {
+				return r.manifest(name, change.lines)
+			}
+		}
 	}
-	if path.Ext(name) != goExtension || len(added) == 0 {
+	if path.Ext(name) != goExtension || len(change.lines) == 0 {
 		return map[int]string{}, nil
 	}
-	return rules.fileFindings(name, added)
+	return r.fileFindings(name, change.lines)
 }
 
 func (rules directiveRules) fileFindings(name string, added addedLines) (map[int]string, error) {

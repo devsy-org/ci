@@ -22,10 +22,14 @@ func TestDirectivesLoadedFiles(t *testing.T) {
 	root := t.TempDir()
 	fixtureFile(t, root, moduleFile, productMod)
 	directiveFixture(t, root, "sub/file", "")
-	stream := fmt.Sprintf(`{"Dir":%q,"GoFiles":["regular.go"],"CgoFiles":["cgo.go"],
+	stream := fmt.Sprintf(
+		`{"Match":["./..."],"Dir":%q,"GoFiles":["regular.go"],"CgoFiles":["cgo.go"],
 "TestGoFiles":["unit_test.go"],"XTestGoFiles":["external_test.go"]}
-{"Dir":%q,"GoFiles":["w_windows.go"]}
-`, root, filepath.Join(root, "sub"))
+{"Match":["./..."],"Dir":%q,"GoFiles":["w_windows.go"]}
+`,
+		root,
+		filepath.Join(root, "sub"),
+	)
 	list := fixtureFile(t, root, "golist.json", stream)
 	for _, tc := range []struct {
 		file, source string
@@ -82,13 +86,16 @@ func TestDirectivesUnlintedImports(t *testing.T) {
 			root := t.TempDir()
 			fixtureFile(t, root, moduleFile, productMod)
 			record := fmt.Sprintf(
-				`{"Dir":%q,"ImportPath":"example.com/product/sub","GoFiles":["x.go"],
-%q:["example.com/product","example.com/product/pkg","example.com/product/loaded","example.com/productive/_impl"]}`,
+				`{"Match":["./..."],"Dir":%q,"ImportPath":"example.com/product/sub","GoFiles":["x.go"],
+"Module":{"Path":"example.com/product","Main":true},
+%q:["example.com/product","example.com/product/pkg","example.com/product/loaded","example.com/product/v2"]}`,
 				root,
 				field,
 			)
 			list := fixtureFile(t, root, "imports.json", record+"\n"+record+`
-{"ImportPath":"example.com/product/loaded"}`)
+{"Match":["./..."],"ImportPath":"example.com/product/loaded"}
+{"ImportPath":"example.com/product/v2","DepOnly":true,"Module":{"Path":"example.com/product/v2"}}
+{"ImportPath":"example.com/product/pkg","DepOnly":true,"Module":{"Path":"example.com/product","Main":true}}`)
 			input := directiveTest{args: []string{rootFlag, root, guardFlag, goListFlag, list}}
 			const want = `"example.com/product/sub" imports a package outside ./...: "example.com/product"
 "example.com/product/sub" imports a package outside ./...: "example.com/product/pkg"
@@ -119,7 +126,7 @@ func TestDirectivePhysicalPaths(t *testing.T) {
 				t,
 				t.TempDir(),
 				"golist.json",
-				fmt.Sprintf(`{"Dir":%q,"GoFiles":["new.go"]}`, tc.dir),
+				fmt.Sprintf(`{"Match":["./..."],"Dir":%q,"GoFiles":["new.go"]}`, tc.dir),
 			)
 			input := directiveTest{
 				args: []string{rootFlag, tc.root, guardFlag, goListFlag, list},
@@ -143,6 +150,8 @@ func TestDirectiveModuleDirectory(t *testing.T) {
 		args: []string{rootFlag, root, guardFlag, goListFlag, list},
 		diff: "--- a/b/x.go\n+++ b/b/x.go\n@@ -1,0 +2 @@\n+var x int\n",
 	}
+	assertDirectives(t, input, passed, 0)
+	input.args = append(input.args, modDirFlag, "b")
 	assertDirectives(t, input, `"b/x.go" 1: `+missingGo+"\n"+failed, 1)
 	input.args = append(input.args, modDirFlag, "./a/")
 	assertDirectives(t, input, passed, 0)
@@ -156,12 +165,34 @@ func TestDirectiveAddedSymlink(t *testing.T) {
 	root := t.TempDir()
 	fixtureFile(t, root, moduleFile, productMod)
 	directiveFixture(t, root, "testdata/impl/x.go", sourcePkg)
+	makeDirectiveLink(t, "testdata/impl", filepath.Join(root, "source-link"))
 	initDirectiveRepo(t, root)
 	makeDirectiveLink(t, "testdata/impl", filepath.Join(root, "pkg"))
 	directiveGit(t, root, exec.CommandContext(t.Context(), "git", "add", "-A"))
-	diff := directiveGit(t, root, directiveDiffCommand(t, "no renames"))
-	input := directiveTest{args: []string{rootFlag, root, guardFlag}, diff: diff}
+	input := directiveTest{args: []string{rootFlag, root, guardFlag}}
+	input.diff = directiveGit(t, root, directiveDiffCommand(t, "no renames"))
 	assertDirectives(t, input, "\"pkg\" 1: adds a symlink\n"+failed, 1)
+	input.diff = directiveGit(t, root, directiveDiffCommand(t, copyCase))
+	if !strings.Contains(input.diff, "copy to pkg") ||
+		strings.Contains(input.diff, "new file mode") {
+		t.Fatalf("expected a copy without a mode header: %s", input.diff)
+	}
+	assertDirectives(t, input, "\"pkg\" 1: adds a symlink\n"+failed, 1)
+}
+
+func TestDeletionOnlyLoadedCheck(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	fixtureFile(t, root, moduleFile, productMod)
+	fixtureFile(t, root, "old.go", sourcePkg)
+	list := fixtureFile(t, root, "golist.json", "")
+	input := directiveTest{
+		args: []string{rootFlag, root, guardFlag, goListFlag, list},
+		diff: "--- a/old.go\n+++ b/old.go\n@@ -2 +1,0 @@\n-var x int\n",
+	}
+	assertDirectives(t, input, `"old.go" 1: `+missingGo+"\n"+failed, 1)
+	input.diff = strings.ReplaceAll(input.diff, "+++ b/old.go", "+++ /dev/null")
+	assertDirectives(t, input, passed, 0)
 }
 
 func makeDirectiveLink(t *testing.T, target, name string) {

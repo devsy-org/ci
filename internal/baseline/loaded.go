@@ -5,22 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"golang.org/x/mod/modfile"
 )
 
 const goExtension = ".go"
 
 type loadedGo struct {
-	root, moduleDir, modulePath string
-	files, packages             map[string]bool
-	imports                     map[packageImport]bool
+	tree            *os.Root
+	root, moduleDir string
+	files, allowed  map[string]bool
+	imports         map[packageImport]bool
 }
 
 type packageImport struct{ importer, imported string }
@@ -29,39 +26,34 @@ type listedPackage struct {
 	Dir, ImportPath                              string
 	GoFiles, CgoFiles, TestGoFiles, XTestGoFiles []string
 	Imports, TestImports, XTestImports           []string
+	Match                                        []string
+	ForTest                                      string
+	Module                                       *listedModule
 }
 
-func readLoaded(rules directiveRules) (loadedGo, error) {
+type listedModule struct {
+	Path string
+	Main bool
+}
+
+func readLoaded(tree *os.Root, rules directiveRules) (loadedGo, error) {
 	if rules.goList == "" {
-		return loadedGo{}, nil
+		return loadedGo{tree: tree}, nil
 	}
 	root, err := physicalPath(rules.root)
 	if err != nil {
 		return loadedGo{}, fmt.Errorf("resolve go list root: %w", err)
-	}
-	manifest := filepath.Join(rules.moduleDir, "go.mod")
-	modulePath := modfile.ModulePath(readSource(root, manifest))
-	if modulePath == "" {
-		return loadedGo{}, fmt.Errorf("expected a module path in %q", manifest)
 	}
 	file, err := os.Open(filepath.Clean(rules.goList))
 	if err != nil {
 		return loadedGo{}, fmt.Errorf("open go list stream: %w", err)
 	}
 	loaded := loadedGo{
-		root:       root,
-		moduleDir:  rules.moduleDir,
-		modulePath: modulePath,
-		files: make(
-			map[string]bool,
-		),
-		packages: make(map[string]bool),
-		imports:  make(map[packageImport]bool),
+		tree: tree, root: root, moduleDir: rules.moduleDir,
+		files: map[string]bool{}, allowed: map[string]bool{},
+		imports: map[packageImport]bool{},
 	}
-	if err := errors.Join(loaded.decode(file), file.Close()); err != nil {
-		return loadedGo{}, fmt.Errorf("read go list stream: %w", err)
-	}
-	return loaded, nil
+	return loaded, errors.Join(loaded.decode(file), file.Close())
 }
 
 func (loaded loadedGo) decode(input io.Reader) error {
@@ -73,61 +65,86 @@ func (loaded loadedGo) decode(input io.Reader) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("decode package: %w", err)
+			return fmt.Errorf("read go list stream: decode package: %w", err)
 		}
-		if err := loaded.addPackage(pkg); err != nil {
+		if err := loaded.index(pkg); err != nil {
 			return err
 		}
 	}
 }
 
-func (loaded loadedGo) addPackage(pkg listedPackage) error {
-	loaded.packages[pkg.ImportPath] = true
-	if pkg.Dir != "" {
-		dir, err := physicalPath(pkg.Dir)
-		if err != nil {
-			return fmt.Errorf("resolve package directory: %w", err)
-		}
-		for _, file := range slices.Concat(pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles) {
-			loaded.files[filepath.Join(dir, file)] = true
-		}
+func (loaded loadedGo) index(pkg listedPackage) error {
+	if pkg.Module != nil && !pkg.Module.Main {
+		loaded.allowed[pkg.ImportPath] = true
 	}
-	for _, imported := range slices.Concat(pkg.Imports, pkg.TestImports, pkg.XTestImports) {
-		if imported == loaded.modulePath || strings.HasPrefix(imported, loaded.modulePath+"/") {
-			loaded.imports[packageImport{pkg.ImportPath, imported}] = true
-		}
+	if len(pkg.Match) == 0 || pkg.ForTest != "" {
+		return nil
+	}
+	loaded.allowed[pkg.ImportPath] = true
+	loaded.indexImports(pkg)
+	if pkg.Dir == "" {
+		return nil
+	}
+	dir, err := physicalPath(pkg.Dir)
+	if err != nil {
+		return fmt.Errorf("resolve package directory: %w", err)
+	}
+	for _, file := range slices.Concat(pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles) {
+		loaded.files[filepath.Join(dir, file)] = true
 	}
 	return nil
 }
 
-func physicalPath(name string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(name)
-	if err != nil {
-		return "", fmt.Errorf("resolve %q: %w", name, err)
+func (loaded loadedGo) indexImports(pkg listedPackage) {
+	if pkg.Module == nil || !pkg.Module.Main {
+		return
 	}
-	absolute, err := filepath.Abs(resolved)
-	if err != nil {
-		return "", fmt.Errorf("make %q absolute: %w", resolved, err)
+	for _, imported := range slices.Concat(pkg.Imports, pkg.TestImports, pkg.XTestImports) {
+		if imported == pkg.Module.Path || strings.HasPrefix(imported, pkg.Module.Path+"/") {
+			loaded.imports[packageImport{pkg.ImportPath, imported}] = true
+		}
 	}
-	return absolute, nil
 }
 
-func (loaded loadedGo) rejects(name string, change *fileChange) bool {
-	if loaded.files == nil || (!change.created && len(change.lines) == 0) ||
-		path.Ext(name) != goExtension {
-		return false
+func physicalPath(name string) (string, error) {
+	absolute, err := filepath.Abs(name)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path: %w", err)
 	}
-	if loaded.moduleDir != "." && !strings.HasPrefix(name, loaded.moduleDir+"/") {
-		return false
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlinks: %w", err)
 	}
-	return !loaded.files[filepath.Join(loaded.root, filepath.FromSlash(name))] &&
-		!slices.Contains(strings.Split(name, "/"), "testdata")
+	return resolved, nil
+}
+
+func (loaded loadedGo) rejects(name string) (bool, error) {
+	name = filepath.FromSlash(name)
+	if loaded.files == nil || filepath.Ext(name) != goExtension ||
+		loaded.files[filepath.Join(loaded.root, name)] ||
+		slices.Contains(strings.Split(filepath.ToSlash(name), "/"), "testdata") {
+		return false, nil
+	}
+	return belongsToModule(loaded.tree, filepath.Dir(name), filepath.FromSlash(loaded.moduleDir))
+}
+
+func belongsToModule(root *os.Root, dir, module string) (bool, error) {
+	for ; dir != module && dir != "."; dir = filepath.Dir(dir) {
+		info, err := root.Stat(filepath.Join(dir, goMod))
+		if err == nil && info.Mode().IsRegular() {
+			return false, nil
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("stat nearest go.mod: %w", err)
+		}
+	}
+	return dir == module, nil
 }
 
 func (loaded loadedGo) reportImports(log *strings.Builder) int {
 	var messages []string
-	for imported := range maps.Keys(loaded.imports) {
-		if !loaded.packages[imported.imported] {
+	for imported := range loaded.imports {
+		if !loaded.allowed[imported.imported] {
 			messages = append(messages, fmt.Sprintf("%q imports a package outside ./...: %q",
 				imported.importer, imported.imported))
 		}
