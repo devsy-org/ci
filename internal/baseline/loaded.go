@@ -17,6 +17,7 @@ type loadedGo struct {
 	tree             *os.Root
 	root, moduleDir  string
 	files, allowed   map[string]bool
+	listedModules    map[string]bool
 	imports          map[packageImport]bool
 	skipOtherModules bool
 }
@@ -33,8 +34,8 @@ type listedPackage struct {
 }
 
 type listedModule struct {
-	Path string
-	Main bool
+	Path, Dir string
+	Main      bool
 }
 
 func readLoaded(tree *os.Root, rules directiveRules) (loadedGo, error) {
@@ -56,6 +57,7 @@ func readLoaded(tree *os.Root, rules directiveRules) (loadedGo, error) {
 	}
 	loaded.root = root
 	loaded.files, loaded.allowed = map[string]bool{}, map[string]bool{}
+	loaded.listedModules = map[string]bool{}
 	loaded.imports = map[packageImport]bool{}
 	return loaded, errors.Join(loaded.decode(file), file.Close())
 }
@@ -70,6 +72,9 @@ func (loaded loadedGo) decode(input io.Reader) error {
 		}
 		if err != nil {
 			return fmt.Errorf("read go list stream: decode package: %w", err)
+		}
+		if err := loaded.indexModule(pkg.Module); err != nil {
+			return err
 		}
 		if err := loaded.index(pkg); err != nil {
 			return err
@@ -96,6 +101,19 @@ func (loaded loadedGo) index(pkg listedPackage) error {
 	for _, file := range slices.Concat(pkg.GoFiles, pkg.CgoFiles, pkg.TestGoFiles, pkg.XTestGoFiles) {
 		loaded.files[filepath.Join(dir, file)] = true
 	}
+	return nil
+}
+
+func (loaded loadedGo) indexModule(module *listedModule) error {
+	if module == nil || module.Dir == "" || loaded.listedModules[module.Dir] {
+		return nil
+	}
+	dir, err := physicalPath(module.Dir)
+	if err != nil {
+		return fmt.Errorf("resolve listed module directory: %w", err)
+	}
+	loaded.listedModules[module.Dir] = true
+	loaded.listedModules[dir] = true
 	return nil
 }
 
@@ -132,19 +150,36 @@ func (loaded loadedGo) reason(name string) (string, error) {
 		return "", err
 	}
 	if dir != filepath.FromSlash(loaded.moduleDir) {
-		if loaded.skipOtherModules {
-			return "", nil
-		}
-		return fmt.Sprintf(
-			"belongs to module %q, which this run does not lint",
-			filepath.ToSlash(dir),
-		), nil
+		return loaded.otherModuleReason(dir)
 	}
 	if loaded.files != nil && !loaded.files[filepath.Join(loaded.root, name)] &&
-		!slices.Contains(strings.Split(filepath.ToSlash(name), "/"), "testdata") {
+		!isTestdataPath(name) {
 		return "not loaded by any GOOS build", nil
 	}
 	return "", nil
+}
+
+func (loaded loadedGo) otherModuleReason(dir string) (string, error) {
+	if loaded.skipOtherModules {
+		return "", nil
+	}
+	if loaded.listedModules != nil && isTestdataPath(dir) {
+		physical, err := physicalPath(filepath.Join(loaded.root, dir))
+		if err != nil {
+			return "", fmt.Errorf("resolve testdata module directory: %w", err)
+		}
+		if !loaded.listedModules[physical] {
+			return "", nil
+		}
+	}
+	return fmt.Sprintf(
+		"belongs to module %q, which this run does not lint",
+		filepath.ToSlash(dir),
+	), nil
+}
+
+func isTestdataPath(name string) bool {
+	return slices.Contains(strings.Split(filepath.ToSlash(name), "/"), "testdata")
 }
 
 func nearestModule(root *os.Root, dir string) (string, error) {

@@ -66,6 +66,10 @@ caller repo at the default PR merge ref with `fetch-depth: 0`; the action
 does not fetch refs.
 It needs Git 2.41 or later. Replace `<sha>` with the commit SHA to pin.
 
+Run the action from trusted workflow code. The calling workflow sets its
+inputs, so a PR that controls the workflow can change `allow-new-modules`,
+`other-modules`, or `guarded-linters`.
+
 ```yaml
 on:
   pull_request:
@@ -118,8 +122,9 @@ it fails if a changed Go file belongs to a different module. For a repository
 with several modules, either run the action once per module with
 `other-modules: skip`, or keep the default to reject changes outside the
 selected module.
-It accepts unimported `testdata` files. The Linux lint job does not lint files that only
-load on Windows or macOS.
+It accepts unimported `testdata` files, including files in fixture modules
+with no packages in the Go package list. The Linux lint job does not lint
+files that only load on Windows or macOS.
 
 The full-tree dead-code check runs last. It fails on any `unused` or
 `unparam` finding, and the directive check rejects new suppressions for

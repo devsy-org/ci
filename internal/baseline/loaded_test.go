@@ -188,6 +188,35 @@ func TestNestedRunRejectsRootEdit(t *testing.T) {
 	assertDirectiveError(t, input, "expected --other-modules to be fail or skip")
 }
 
+func TestDirectiveTestdataModule(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	const moduleDir = "fixtures/testdata/fixture"
+	const file = moduleDir + "/x.go"
+	fixtureFile(t, root, moduleFile, productMod)
+	directiveFixture(t, root, moduleDir+"/go.mod", "module example.com/fixture\n")
+	directiveFixture(t, root, file, sourcePkg)
+	input := directiveTest{
+		args: []string{rootFlag, root, guardFlag, goListFlag},
+		diff: "--- /dev/null\n+++ b/" + file + "\n@@ -0,0 +1 @@\n+package main\n",
+	}
+	emptyList := fixtureFile(t, root, "empty.json", "")
+	input.args = append(input.args, emptyList)
+	assertDirectives(t, input, passed, 0)
+
+	record := fmt.Sprintf(
+		`{"ImportPath":"example.com/fixture/dep","Module":{"Path":"example.com/fixture","Dir":%q}}`,
+		filepath.Join(root, moduleDir),
+	)
+	input.args[len(input.args)-1] = fixtureFile(t, root, "dependency.json", record)
+	want := fmt.Sprintf(
+		"%q 1: belongs to module %q, which this run does not lint\n",
+		file,
+		moduleDir,
+	)
+	assertDirectives(t, input, want+failed, 1)
+}
+
 func TestDirectiveAddedSymlink(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
