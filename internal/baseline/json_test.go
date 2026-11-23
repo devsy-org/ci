@@ -24,9 +24,7 @@ func TestFromJSON(t *testing.T) {
 		{"FromLinter":"nestif","Text":"` + "`if x`" + ` has complex nested blocks (complexity: 8)",
 			"Pos":{"Filename":"source.go","Line":17}},
 		{"FromLinter":"nestif","Text":"` + "`if y`" + ` has complex nested blocks (complexity: 4)",
-			"Pos":{"Filename":"source.go","Line":17}},
-		{"FromLinter":"cyclop","Text":"unknown format","Pos":{"Filename":"source.go","Line":17}},
-		{"FromLinter":"cyclop","Text":"unknown format","Pos":{"Filename":"source.go","Line":17}}
+			"Pos":{"Filename":"source.go","Line":17}}
 	],"Report":{"Linters":[]}}`
 	got, err := FromJSON(strings.NewReader(input), "testdata")
 	if err != nil {
@@ -36,7 +34,6 @@ func TestFromJSON(t *testing.T) {
 	const outer = "Outer"
 	const unused = "unused"
 	want := []Entry{
-		{cyclop, source, outer, 2},
 		{nestif, source, outer, 8},
 		{nestif, source, outer + "@2", 4},
 		{unused, "README.md", "-", 1},
@@ -232,5 +229,20 @@ func TestFromJSONRanksMetricValues(t *testing.T) {
 	wantAfter := []Entry{{nestif, source, outer, 9}, {nestif, source, outer + "@2", 5}}
 	if !slices.Equal(before, wantBefore) || !slices.Equal(after, wantAfter) {
 		t.Errorf("FromJSON() = %v then %v, want %v then %v", before, after, wantBefore, wantAfter)
+	}
+}
+
+func TestFromJSONRejectsUnknownMetricMessage(t *testing.T) {
+	t.Parallel()
+
+	for _, finding := range []string{
+		`{"FromLinter":"cyclop","Text":"unknown format","Pos":{"Filename":"source.go","Line":17}}`,
+		`{"FromLinter":"funlen","Text":"Function 'Outer' changed (75 > 60)","Pos":{"Filename":"source.go","Line":17}}`,
+		`{"FromLinter":"revive","Text":"argument-limit: version 2","Pos":{"Filename":"source.go","Line":17}}`,
+	} {
+		_, err := FromJSON(strings.NewReader(`{"Issues":[`+finding+`]}`), "testdata")
+		if err == nil || !strings.Contains(err.Error(), "unrecognized metric message") {
+			t.Errorf("FromJSON(%s) error = %v, want unrecognized metric message", finding, err)
+		}
 	}
 }

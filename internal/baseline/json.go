@@ -87,6 +87,9 @@ func collectEntries(issues []issue, root string) ([]Entry, error) {
 
 func (c *collector) add(finding issue) error {
 	linter, metric := measure(c.patterns, finding.FromLinter, finding.Text)
+	if metric == 0 && isMetricLinter(c.patterns, linter) {
+		return fmt.Errorf("unrecognized metric message from %s: %q", linter, finding.Text)
+	}
 	file, err := localFilename(c.root, finding.Pos.Filename)
 	if err != nil {
 		return err
@@ -121,9 +124,6 @@ func (v *findingValues) entries(key Entry) []Entry {
 		return []Entry{key}
 	}
 	values := slices.Clone(v.metrics)
-	for range v.count {
-		values = append(values, 1)
-	}
 	slices.SortFunc(values, func(a, b int) int { return cmp.Compare(b, a) })
 	entries := make([]Entry, 0, len(values))
 	for i, value := range values {

@@ -2,6 +2,7 @@ package baseline
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -51,6 +52,15 @@ func measure(patterns []metricPattern, linter, message string) (string, int) {
 		}
 	}
 	return linter, 0
+}
+
+// isMetricLinter reports whether linter has a metric pattern, so an unmatched
+// message can fail instead of being counted as 1 after a format change.
+func isMetricLinter(patterns []metricPattern, linter string) bool {
+	return slices.ContainsFunc(
+		patterns,
+		func(p metricPattern) bool { return p.matchesLinter(linter) },
+	)
 }
 
 func (p metricPattern) matchesLinter(linter string) bool {
