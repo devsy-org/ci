@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -58,10 +59,10 @@ func TestCheck(t *testing.T) {
 					fixtureFile(t, filepath.Dir(args[2]), "base.tsv", *tc.base),
 				)
 			} else {
-				args = append(args, "--base-baseline", "")
+				args = append(args, "--adopt")
 			}
 			var stdout, stderr bytes.Buffer
-			code := Run(args, &stdout, &stderr)
+			code := execute(args, &stdout, &stderr, "")
 			want, wantCode := expectedCheck(args, tc.want, tc.stale)
 			if code != wantCode || stdout.String() != want || stderr.Len() != 0 {
 				t.Fatalf("code = %d, stdout = %q, stderr = %q; want code %d and stdout %q",
@@ -97,9 +98,9 @@ func TestCheckSortsAndQuotes(t *testing.T) {
 		`{"Issues":[`+hit+`,`+tricky+`]}`,
 		other+"unused\tremoved.go\t-\t1\n",
 	)
-	args = append(args, "--root", "dir's name\n::warning::")
+	args = append(args, "--adopt", "--root", "dir's name\n::warning::")
 	var stdout, stderr bytes.Buffer
-	if code := Run(args, &stdout, &stderr); code != 1 {
+	if code := execute(args, &stdout, &stderr, ""); code != 1 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 	want := []string{
@@ -110,7 +111,7 @@ func TestCheckSortsAndQuotes(t *testing.T) {
 	}
 	lines := strings.Split(stdout.String(), "\n")
 	if len(lines) != 7 || !slices.Equal(lines[:4], want) ||
-		!strings.HasSuffix(lines[4], `--root $'dir\'s name\n::warning::'`) {
+		!strings.HasSuffix(lines[4], `--root $'dir\'s name\x0a::warning::'`) {
 		t.Fatalf("unexpected report: %q", stdout.String())
 	}
 }
@@ -124,7 +125,7 @@ func TestUpdate(t *testing.T) {
 	args := fixtureArgs(t, updateCommand,
 		`{"Issues":[`+finding+`,`+finding+`,`+added+`,`+hit+`]}`, kept+removed+bigEntry)
 	var stdout, stderr bytes.Buffer
-	if code := Run(args, &stdout, &stderr); code != 0 {
+	if code := execute(args, &stdout, &stderr, ""); code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 	if want := "Lint baseline updated: 1 removed, 1 lowered.\n"; stdout.String() != want {
@@ -159,8 +160,8 @@ func TestRunErrors(t *testing.T) {
 			var args []string
 			if tc.flag != 0 {
 				args = fixtureArgs(t, checkCommand, emptyLint, "")
-				args = append(args, "--base-baseline", "")
 				dir := filepath.Dir(args[2])
+				args = append(args, "--base-baseline", fixtureFile(t, dir, "base.tsv", ""))
 				if tc.missing {
 					args[tc.flag] = filepath.Join(dir, "missing")
 				} else {
@@ -168,11 +169,7 @@ func TestRunErrors(t *testing.T) {
 				}
 			}
 			var stdout, stderr bytes.Buffer
-			if code := Run(
-				args,
-				&stdout,
-				&stderr,
-			); code != 2 ||
+			if code := execute(args, &stdout, &stderr, ""); code != 2 ||
 				!strings.Contains(stderr.String(), tc.want) ||
 				stdout.Len() != 0 {
 				t.Fatalf("code = %d, stdout = %q, stderr = %q; want code 2 and error containing %q",
@@ -188,11 +185,12 @@ func TestSummary(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", path)
 	var stdout, stderr bytes.Buffer
 	args := fixtureArgs(t, checkCommand, `{"Issues":[`+hit+`]}`, "")
+	update := append([]string{updateCommand}, args[1:]...)
+	args = append(args, "--adopt")
 	if code := Run(args, &stdout, &stderr); code != 1 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
-	args[0] = updateCommand
-	if code := Run(args, &stdout, &stderr); code != 0 {
+	if code := Run(update, &stdout, &stderr); code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 	data, err := os.ReadFile(filepath.Clean(path))
@@ -228,7 +226,7 @@ func TestUpdateCreatesMissingBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := Run(args, &stdout, &stderr); code != 0 {
+	if code := execute(args, &stdout, &stderr, ""); code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
 	if want := "Lint baseline created: 1 entries.\n"; stdout.String() != want {
@@ -237,5 +235,65 @@ func TestUpdateCreatesMissingBaseline(t *testing.T) {
 	data, err := os.ReadFile(filepath.Clean(args[4]))
 	if err != nil || string(data) != bigEntry {
 		t.Fatalf("created baseline = %q, %v; want %q", data, err, bigEntry)
+	}
+}
+
+func TestCheckNeedsBaseOrAdopt(t *testing.T) {
+	t.Parallel()
+	args := fixtureArgs(t, checkCommand, emptyLint, "")
+	base := fixtureFile(t, filepath.Dir(args[2]), "base.tsv", "")
+	for _, extra := range [][]string{nil, {"--adopt", "--base-baseline", base}} {
+		var stdout, stderr bytes.Buffer
+		if code := execute(append(slices.Clone(args), extra...), &stdout, &stderr, ""); code != 2 ||
+			!strings.Contains(stderr.String(), "exactly one of --base-baseline or --adopt") {
+			t.Fatalf("flags %q: code = %d, stderr = %q", extra, code, stderr.String())
+		}
+	}
+}
+
+func TestRejectsSymlinkedInput(t *testing.T) {
+	t.Parallel()
+	args := fixtureArgs(t, checkCommand, emptyLint, "")
+	link := filepath.Join(filepath.Dir(args[2]), "link.tsv")
+	if err := os.Symlink(args[4], link); err != nil {
+		t.Fatal(err)
+	}
+	args[4] = link
+	var stdout, stderr bytes.Buffer
+	if code := execute(append(args, "--adopt"), &stdout, &stderr, ""); code != 2 ||
+		!strings.Contains(stderr.String(), "not a regular file") {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+}
+
+func TestReportCapsProblems(t *testing.T) {
+	t.Parallel()
+	issues := make([]string, maxReported+3)
+	for i := range issues {
+		issues[i] = fmt.Sprintf(`{"FromLinter":"unused","Pos":{"Filename":"f%03d.go","Line":1}}`, i)
+	}
+	args := fixtureArgs(t, checkCommand, `{"Issues":[`+strings.Join(issues, ",")+`]}`, "")
+	var stdout, stderr bytes.Buffer
+	if code := execute(append(args, "--adopt"), &stdout, &stderr, ""); code != 1 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")
+	if len(lines) != maxReported+2 || lines[maxReported] != "... and 3 more" {
+		t.Fatalf("got %d lines, tail %q", len(lines), lines[len(lines)-2:])
+	}
+}
+
+func TestShellArgRoundTrips(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+	for _, arg := range []string{"plain.tsv", "café.tsv", "it's \\ \"x\"\n\t::warning::", ""} {
+		cmd := exec.CommandContext(t.Context(), "bash", "-c", `eval "printf %s $QUOTED"`)
+		cmd.Env = append(os.Environ(), "QUOTED="+shellArg(arg))
+		out, err := cmd.Output()
+		if err != nil || string(out) != arg {
+			t.Fatalf("shellArg(%q) = %s; bash printed %q, %v", arg, shellArg(arg), out, err)
+		}
 	}
 }
