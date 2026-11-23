@@ -35,7 +35,7 @@ jobs:
 
 Keep the job free of secrets and of steps that run code from the PR
 checkout. Do not switch to `pull_request_target` to check fork PRs: that
-event runs with a write token and secrets. The action installs its own Go
+event can have a write token and access to secrets. The action installs its own Go
 version and sets `GOTOOLCHAIN=local` for later steps in the same job, which
 is one more reason to give it a dedicated job.
 
@@ -48,7 +48,9 @@ production. Only production additions and removals count toward the limit.
 An edited rename counts as production when either path is production.
 Whole-file deletions and unchanged renames count as zero lines. Files Git
 reports as binary count as zero when they have a known binary extension;
-otherwise they are counted from a text diff.
+otherwise they are counted from a text diff. The job summary lists the
+binary files that were not counted, so reviewers can check them. The job
+log shows only the table and the verdict.
 
 To exceed the limit, add the `size-exception` label and a line in the PR body
 starting with `Size exception:`, followed by a reason of at least 20
