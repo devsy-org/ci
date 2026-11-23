@@ -1,0 +1,116 @@
+package prsize
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestReadException(t *testing.T) {
+	t.Parallel()
+
+	const eventStart = `{"pull_request":{"labels":[{"name":"size-exception"}],"body":`
+	cases := []struct {
+		name    string
+		payload string
+		want    bool
+		bad     bool
+	}{
+		{
+			name:    "both conditions",
+			payload: eventStart + `"Details\nSize exception:  01234567890123456789  "}}`,
+			want:    true,
+		},
+		{
+			name:    "short reason",
+			payload: eventStart + `"Size exception:       0123456789012345678  "}}`,
+		},
+		{
+			name:    "must start line",
+			payload: eventStart + `" Size exception: 01234567890123456789"}}`,
+		},
+		{name: "null body", payload: eventStart + `null}}`},
+		{
+			name:    "reason without label",
+			payload: `{"pull_request":{"body":"Size exception: 01234567890123456789"}}`,
+		},
+		{name: "malformed", payload: "{", bad: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := readException("event.json", func(path string) ([]byte, error) {
+				if path != "event.json" {
+					t.Fatalf("read path = %q, want event.json", path)
+				}
+				return []byte(tc.payload), nil
+			})
+			if got != tc.want || (err != nil) != tc.bad {
+				t.Errorf("readException = %t, %v; want %t, error: %t", got, err, tc.want, tc.bad)
+			}
+		})
+	}
+}
+
+func TestReadExceptionIOError(t *testing.T) {
+	t.Parallel()
+
+	unreadable := errors.New("unreadable")
+	_, err := readException("event.json", func(string) ([]byte, error) { return nil, unreadable })
+	if !errors.Is(err, unreadable) {
+		t.Errorf("readException = %v, want unreadable error", err)
+	}
+}
+
+func TestVerdict(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		lines     int
+		exception bool
+		passed    bool
+		message   string
+	}{
+		{
+			name:    "below limit",
+			lines:   399,
+			passed:  true,
+			message: "PASS: 399 production lines (limit 400).",
+		},
+		{
+			name:    "at limit",
+			lines:   400,
+			passed:  true,
+			message: "PASS: 400 production lines (limit 400).",
+		},
+		{name: "over limit", lines: 401, message: "FAIL: 401 production lines (limit 400)."},
+		{
+			name: "exception", lines: 401, exception: true, passed: true,
+			message: "PASS: 401 production lines (limit 400), size exception accepted.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			passed, message := verdict(tc.lines, 400, tc.exception)
+			if passed != tc.passed || message != tc.message {
+				t.Errorf("verdict = %t, %q; want %t, %q", passed, message, tc.passed, tc.message)
+			}
+		})
+	}
+}
+
+func TestRenderFailure(t *testing.T) {
+	t.Parallel()
+
+	got := renderReport(totals{production: {files: 1, lines: 401}}, "FAIL", false)
+	for _, want := range []string{
+		"| Config | 0 | 0 | no |", "| Production | 1 | 401 | yes |",
+		"\nFAIL\n", "add the `size-exception` label", "`Size exception:`", "20 characters",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report does not contain %q:\n%s", want, got)
+		}
+	}
+}
