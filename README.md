@@ -1,0 +1,58 @@
+# Devsy CI tools
+
+This repo holds shared CI tools for Devsy repositories.
+
+## PR size
+
+The `pr-size` action counts a pull request's changed lines by class and fails
+when production lines exceed the limit.
+
+Run it in its own job on `pull_request` with the types `opened`,
+`synchronize`, `reopened`, `labeled`, `unlabeled` and `edited`, so the
+verdict updates when the label or PR body changes. Check out the caller repo
+with `fetch-depth: 0` first; the action does not fetch refs. It needs git
+2.41 or later. Replace `<sha>` with the commit SHA to pin.
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+jobs:
+  pr-size:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@<sha>
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: devsy-org/ci/pr-size@<sha>
+        with:
+          limit: "400"
+          report-only: "false"
+```
+
+Keep the job free of secrets and of steps that run code from the PR
+checkout. Do not switch to `pull_request_target` to check fork PRs: that
+event can have a write token and access to secrets. The action installs its own Go
+version and sets `GOTOOLCHAIN=local` for later steps in the same job, which
+is one more reason to give it a dedicated job.
+
+The action compares `HEAD` with its merge base on `origin/<base-ref>`. By
+default, `base-ref` is the PR target branch. Git attributes are read from the
+merge base, so `.gitattributes` changes in the PR do not change the count.
+
+The report groups changed files as generated, tests, docs, config, or
+production. Only production additions and removals count toward the limit.
+An edited rename counts as production when either path is production.
+Whole-file deletions and unchanged renames count as zero lines. Files Git
+reports as binary count as zero when they have a known binary extension;
+otherwise they are counted from a text diff. The job summary lists the
+binary files that were not counted, so reviewers can check them. The job
+log shows only the table and the verdict.
+
+To exceed the limit, add the `size-exception` label and a line in the PR body
+starting with `Size exception:`, followed by a reason of at least 20
+printable characters after trimming spaces. Set `report-only` to `"true"` to
+show the verdict without enforcing it.
