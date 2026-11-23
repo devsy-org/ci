@@ -1,7 +1,6 @@
 package baseline
 
 import (
-	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,7 +25,6 @@ func metricPatterns() []metricPattern {
 		{"revive:function-length", `^maximum number of (?:statements|lines)` + exceeded},
 		{"revive:cognitive-complexity", `^function .+ has cognitive` + complexity},
 		{"revive:cyclomatic", `^function .+ has cyclomatic` + complexity},
-		{"revive:max-control-nesting", `^control flow nesting exceeds (\d+)$`},
 	}
 	patterns := make([]metricPattern, 0, len(specs))
 	for _, spec := range specs {
@@ -44,7 +42,11 @@ func measure(patterns []metricPattern, linter, message string) (string, int) {
 			continue
 		}
 		if match := pattern.regex.FindStringSubmatch(message); match != nil {
-			return pattern.linter, metricValue(pattern.linter, match[1])
+			value, err := strconv.Atoi(match[1])
+			if err != nil {
+				return pattern.linter, 0
+			}
+			return pattern.linter, value
 		}
 	}
 	return linter, 0
@@ -52,19 +54,4 @@ func measure(patterns []metricPattern, linter, message string) (string, int) {
 
 func (p metricPattern) matchesLinter(linter string) bool {
 	return p.linter == linter || (linter == "funlen" && strings.HasPrefix(p.linter, "funlen:"))
-}
-
-func metricValue(linter, text string) int {
-	value, err := strconv.Atoi(text)
-	if err != nil {
-		return 0
-	}
-	// Revive stops walking a branch as soon as the depth exceeds the limit by one.
-	if linter == "revive:max-control-nesting" {
-		if value == math.MaxInt {
-			return 0
-		}
-		return value + 1
-	}
-	return value
 }

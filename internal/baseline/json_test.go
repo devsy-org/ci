@@ -1,6 +1,8 @@
 package baseline
 
 import (
+	"bytes"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -40,6 +42,39 @@ func TestFromJSON(t *testing.T) {
 		{unused, source, "Counter.Add", 1},
 		{unused, source, outer, 2},
 		{unused, source, "Pair.Reset", 1},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("FromJSON() = %#v, want %#v", got, want)
+	}
+}
+
+func TestFromGolangCILintJSON(t *testing.T) {
+	t.Parallel()
+
+	data, err := os.ReadFile("testdata/golangci.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := FromJSON(bytes.NewReader(data), "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const baseline = `cyclop	big.go	Big	121
+funlen:statements	big.go	Big	152
+funlen:statements	res.go	L	22
+gocognit	big.go	Big	300
+nestif	big.go	Big	6
+revive:argument-limit	big.go	Big	6
+revive:cognitive-complexity	big.go	Big	300
+revive:cyclomatic	big.go	Big	121
+revive:function-length	big.go	Big	272
+revive:function-length	res.go	L	22
+revive:function-result-limit	res.go	R	3
+revive:max-control-nesting	big.go	Big	30
+`
+	want, err := Parse(strings.NewReader(baseline))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("FromJSON() = %#v, want %#v", got, want)

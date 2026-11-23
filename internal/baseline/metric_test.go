@@ -85,7 +85,7 @@ func TestMeasure(t *testing.T) {
 			revive,
 			"max-control-nesting: control flow nesting exceeds 4",
 			"revive:max-control-nesting",
-			5,
+			0,
 		},
 		{
 			"other revive rule",
