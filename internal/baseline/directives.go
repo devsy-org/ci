@@ -19,7 +19,7 @@ import (
 const directivesCommand = "directives"
 
 type directiveRules struct {
-	root                            string
+	root, goList                    string
 	guarded                         map[string]bool
 	allowGenerated, allowNewModules bool
 }
@@ -48,6 +48,7 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 	flags := flag.NewFlagSet(directivesCommand, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&rules.root, "root", "", "destination source tree")
+	flags.StringVar(&rules.goList, "go-list", "", "go list -e -json package stream")
 	flags.BoolVar(&rules.allowGenerated, "allow-generated", false, "allow generated headers")
 	flags.BoolVar(
 		&rules.allowNewModules,
@@ -77,12 +78,20 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 	if err != nil {
 		return "", 0, err
 	}
+	loaded, err := readLoaded(rules.goList, rules.root)
+	if err != nil {
+		return "", 0, err
+	}
 	var log strings.Builder
-	count := 0
+	count := loaded.reportImports(&log)
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		findings, err := rules.pathFindings(name, files[name])
 		if err != nil {
 			return "", 0, fmt.Errorf("check directives in %q: %w", name, err)
+		}
+		if loaded.rejects(name, files[name]) {
+			fmt.Fprintf(&log, "%q 1: not loaded by any GOOS build\n", name)
+			count++
 		}
 		for _, number := range slices.Sorted(maps.Keys(findings)) {
 			fmt.Fprintf(&log, "%q %d: %s\n", name, number, findings[number])
@@ -99,7 +108,7 @@ func (rules directiveRules) pathFindings(name string, change *fileChange) (map[i
 			return map[int]string{1: "new Go module or workspace file"}, nil
 		}
 	}
-	if path.Ext(name) != ".go" || len(change.lines) == 0 {
+	if path.Ext(name) != goExtension || len(change.lines) == 0 {
 		return map[int]string{}, nil
 	}
 	return rules.fileFindings(name, change.lines)

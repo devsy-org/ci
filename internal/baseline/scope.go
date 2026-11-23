@@ -37,7 +37,7 @@ func (c scopeCache) scope(file string, line int) string {
 }
 
 func readScopes(root, file string) []funcScope {
-	if filepath.Ext(file) != ".go" || !filepath.IsLocal(file) {
+	if filepath.Ext(file) != goExtension || !filepath.IsLocal(file) {
 		return nil
 	}
 	src := readSource(root, file)
