@@ -88,8 +88,8 @@ Go version named by their `go` and `toolchain` directives.
 It replaces the checkout's `.golangci.yaml` with the merge base copy
 before linting. The config must already exist at the merge base. The action
 rejects `revive.config`, custom linters, and plugin keys. Use one YAML
-document with string keys only. Aliases and merge keys cannot serve as
-mapping keys. The action passes only
+document with string keys made of ASCII letters, digits, underscores, or
+hyphens. Aliases and merge keys cannot serve as mapping keys. The action passes only
 allowlisted linters to `--enable-only`, so goheader, depguard, and gocritic
 cannot run through this action. It checks directives, then probes known violations with the
 base config. The probe fails if the config turns off a limit or drops
