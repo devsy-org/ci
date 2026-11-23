@@ -14,6 +14,11 @@ const headRev = "HEAD"
 
 type gitFunc func(...string) (string, error)
 
+type inspection struct {
+	totals        totals
+	skippedBinary []string
+}
+
 func gitRunner(ctx context.Context, repo string) gitFunc {
 	return func(args ...string) (string, error) {
 		//nolint:gosec // Invoke Git directly with arguments built for specific subcommands.
@@ -27,50 +32,58 @@ func gitRunner(ctx context.Context, repo string) gitFunc {
 	}
 }
 
-func inspect(git gitFunc, baseRef string) (totals, error) {
+func inspect(git gitFunc, baseRef string) (inspection, error) {
 	ref := "refs/remotes/origin/" + baseRef
 	remote, err := git("show-ref", "--verify", "--hash", ref)
 	if err != nil {
-		return totals{}, fmt.Errorf("remote-tracking ref %s unavailable: %w", ref, err)
+		return inspection{}, fmt.Errorf("remote-tracking ref %s unavailable: %w", ref, err)
 	}
 	base, err := git("merge-base", strings.TrimSpace(remote), headRev)
 	if err != nil {
-		return totals{}, fmt.Errorf("merge base for %s unavailable; check local ref: %w", ref, err)
+		return inspection{}, fmt.Errorf(
+			"merge base for %s unavailable; check local ref: %w",
+			ref,
+			err,
+		)
 	}
 	base = strings.TrimSpace(base)
 	diff := []string{"--attr-source=" + base, "diff", "--no-ext-diff", "--no-textconv", "-z", "-M"}
 	rawStats, err := git(append(diff, "--numstat", base, headRev, "--")...)
 	if err != nil {
-		return totals{}, err
+		return inspection{}, err
 	}
 	rawStatus, err := git(append(diff, "--name-status", base, headRev, "--")...)
 	if err != nil {
-		return totals{}, err
+		return inspection{}, err
 	}
 	status, err := parseStatus(rawStatus)
 	if err != nil {
-		return totals{}, err
+		return inspection{}, err
 	}
 	return tally(git, base, rawStats, status)
 }
 
-func tally(git gitFunc, base, raw string, statuses map[string]string) (totals, error) {
-	var result totals
+func tally(git gitFunc, base, raw string, statuses map[string]string) (inspection, error) {
+	var result inspection
 	for fields := diffFields(raw); len(fields) > 0; {
 		change, remaining, err := parseChange(fields)
 		if err != nil {
-			return totals{}, err
+			return inspection{}, err
 		}
 		fields = remaining
 		status := statuses[change.name]
-		if err := change.resolveLines(git, base, status); err != nil {
-			return totals{}, err
+		skipped, err := change.resolveLines(git, base, status)
+		if err != nil {
+			return inspection{}, err
+		}
+		if skipped {
+			result.skippedBinary = append(result.skippedBinary, change.name)
 		}
 		kind, err := change.classify(git, base, status)
 		if err != nil {
-			return totals{}, err
+			return inspection{}, err
 		}
-		bucket := &result[kind]
+		bucket := &result.totals[kind]
 		bucket.files++
 		bucket.lines += change.lines
 	}
@@ -128,18 +141,21 @@ type change struct {
 	binary bool
 }
 
-func (c *change) resolveLines(git gitFunc, base, status string) error {
+func (c *change) resolveLines(git gitFunc, base, status string) (bool, error) {
 	switch {
 	case status == "D":
 		c.lines = 0
-	case c.binary && !knownBinary(c.name):
+	case c.binary:
+		if knownBinary(c.name) {
+			return true, nil
+		}
 		patch, err := c.textPatch(git, base)
 		if err != nil {
-			return err
+			return false, err
 		}
 		c.lines = countPatchLines(patch)
 	}
-	return nil
+	return false, nil
 }
 
 func (c change) textPatch(git gitFunc, base string) (string, error) {
