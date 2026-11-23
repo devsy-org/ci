@@ -113,9 +113,11 @@ The action rejects added symlinks.
 The action also rejects new line directives and build constraints that
 mention the `ignore` tag.
 The action checks whether changed Go files in the selected module load on
-Linux, Windows, or macOS with cgo and the base config's build tags. It skips
-files whose nearest `go.mod` belongs to a different module. To check a
-nested module, run the action with `working-directory` set to that module.
+Linux, Windows, or macOS with cgo and the base config's build tags. By default,
+it fails if a changed Go file belongs to a different module. For a repository
+with several modules, either run the action once per module with
+`other-modules: skip`, or keep the default to reject changes outside the
+selected module.
 It accepts unimported `testdata` files. The Linux lint job does not lint files that only
 load on Windows or macOS.
 

@@ -20,12 +20,14 @@ import (
 const (
 	directivesCommand = "directives"
 	goMod             = "go.mod"
+	otherModulesFail  = "fail"
+	otherModulesSkip  = "skip"
 )
 
 type directiveRules struct {
-	root, goList, moduleDir         string
-	guarded                         map[string]bool
-	allowGenerated, allowNewModules bool
+	root, goList, moduleDir, otherModules string
+	guarded                               map[string]bool
+	allowGenerated, allowNewModules       bool
 }
 
 func executeDirectives(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -54,6 +56,12 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 	flags.StringVar(&rules.root, "root", "", "destination source tree")
 	flags.StringVar(&rules.goList, "go-list", "", "go list -e -json -deps -test package stream")
 	flags.StringVar(&rules.moduleDir, "module-dir", ".", "module directory relative to root")
+	flags.StringVar(
+		&rules.otherModules,
+		"other-modules",
+		otherModulesFail,
+		"fail or skip Go files in other modules",
+	)
 	flags.BoolVar(&rules.allowGenerated, "allow-generated", false, "allow generated headers")
 	flags.BoolVar(
 		&rules.allowNewModules,
@@ -79,6 +87,9 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 		return rules, errors.New("expected --module-dir relative to --root")
 	}
 	rules.moduleDir = filepath.ToSlash(filepath.Clean(rules.moduleDir))
+	if !slices.Contains([]string{otherModulesFail, otherModulesSkip}, rules.otherModules) {
+		return rules, errors.New("expected --other-modules to be fail or skip")
+	}
 	return rules, nil
 }
 
@@ -120,9 +131,12 @@ func (r directiveRules) findings(name string, c *fileChange, l loadedGo) (map[in
 	if err != nil {
 		return nil, err
 	}
-	rejected, err := l.rejects(name)
-	if rejected && findings[1] == "" {
-		findings[1] = "not loaded by any GOOS build"
+	reason, err := l.reason(name)
+	if reason != "" {
+		if findings[1] != "" {
+			reason = findings[1] + "; " + reason
+		}
+		findings[1] = reason
 	}
 	return findings, err
 }

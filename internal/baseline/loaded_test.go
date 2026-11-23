@@ -150,6 +150,14 @@ func TestDirectiveModuleDirectory(t *testing.T) {
 		args: []string{rootFlag, root, guardFlag, goListFlag, list},
 		diff: "--- a/b/x.go\n+++ b/b/x.go\n@@ -1,0 +2 @@\n+var x int\n",
 	}
+	const otherModuleFlag = "--other-modules"
+	assertDirectives(
+		t,
+		input,
+		`"b/x.go" 1: belongs to module "b", which this run does not lint`+"\n"+failed,
+		1,
+	)
+	input.args = append(input.args, otherModuleFlag, otherModulesSkip)
 	assertDirectives(t, input, passed, 0)
 	input.args = append(input.args, modDirFlag, "b")
 	assertDirectives(t, input, `"b/x.go" 1: `+missingGo+"\n"+failed, 1)
@@ -158,6 +166,26 @@ func TestDirectiveModuleDirectory(t *testing.T) {
 	fixtureFile(t, root, file, sourcePkg+"//nolint\n")
 	input.diff = strings.ReplaceAll(input.diff, "var x int", "//nolint")
 	assertDirectives(t, input, `"b/x.go" 2: `+bare+"\n"+failed, 1)
+}
+
+func TestNestedRunRejectsRootEdit(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	fixtureFile(t, root, moduleFile, productMod)
+	fixtureFile(t, root, "new.go", sourcePkg)
+	directiveFixture(t, root, "nested/go.mod", "module example.com/nested\n")
+	input := directiveTest{
+		args: []string{rootFlag, root, guardFlag, modDirFlag, "nested"},
+		diff: addedHunk + "+package main\n",
+	}
+	assertDirectives(
+		t,
+		input,
+		`"new.go" 1: belongs to module ".", which this run does not lint`+"\n"+failed,
+		1,
+	)
+	input.args = append(input.args, "--other-modules", "warn")
+	assertDirectiveError(t, input, "expected --other-modules to be fail or skip")
 }
 
 func TestDirectiveAddedSymlink(t *testing.T) {
