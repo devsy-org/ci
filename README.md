@@ -119,6 +119,16 @@ nested module, run the action with `working-directory` set to that module.
 It accepts unimported `testdata` files. The Linux lint job does not lint files that only
 load on Windows or macOS.
 
+The full-tree dead-code check runs last. It fails on any `unused` or
+`unparam` finding, and the directive check rejects new suppressions for
+both linters. Set `dead-code: "false"` to turn off both checks. To check
+for dead code on pushes to `main`, run:
+
+```sh
+golangci-lint run --config .golangci.yaml --enable-only unused,unparam \
+  --allow-parallel-runners --issues-exit-code=1 --path-prefix=./ ./...
+```
+
 Set `working-directory` for a Go module outside the repo root. Set `config`
 and `baseline` to paths relative to that directory to use different names.
 Use `golangci-lint-version` to override `v2.15.0` or `guarded-linters` to
