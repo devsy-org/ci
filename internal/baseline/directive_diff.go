@@ -15,6 +15,7 @@ type diffState struct {
 	file, gitPaths, newFile    string
 	before, after              hunkRange
 	pendingNew, fromNull, hunk bool
+	newSymlink                 bool
 }
 
 type hunkRange struct{ line, remaining int }
@@ -22,8 +23,8 @@ type hunkRange struct{ line, remaining int }
 type addedLines map[int]bool
 
 type fileChange struct {
-	lines   addedLines
-	created bool
+	lines            addedLines
+	created, symlink bool
 }
 
 func collectAddedLines(input io.Reader) (map[string]*fileChange, error) {
@@ -37,7 +38,9 @@ func collectAddedLines(input io.Reader) (map[string]*fileChange, error) {
 			return nil, fmt.Errorf("malformed diff at line %d: %w", diffLine, err)
 		}
 		if state.newFile != "" {
-			fileChanges(files, state.newFile).created = true
+			change := fileChanges(files, state.newFile)
+			change.created = true
+			change.symlink = change.symlink || state.newSymlink
 		}
 		if number != 0 {
 			fileChanges(files, state.file).lines[number] = true
@@ -68,7 +71,7 @@ func (d diffState) inBody() bool {
 }
 
 func (d *diffState) read(line string) (int, error) {
-	d.newFile = ""
+	d.newFile, d.newSymlink = "", false
 	if d.hunk && line == `\ No newline at end of file` {
 		return 0, nil
 	}
@@ -144,6 +147,7 @@ func (d *diffState) gitMetadata(line string) error {
 	case strings.HasPrefix(line, "new file mode "):
 		file, err := newGitPath(d.gitPaths)
 		d.newFile = file
+		d.newSymlink = line == "new file mode 120000"
 		return err
 	case strings.HasPrefix(line, "Binary files ") && strings.HasSuffix(line, " differ"):
 		*d = diffState{}

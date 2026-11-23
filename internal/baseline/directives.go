@@ -19,7 +19,7 @@ import (
 const directivesCommand = "directives"
 
 type directiveRules struct {
-	root, goList                    string
+	root, goList, moduleDir         string
 	guarded                         map[string]bool
 	allowGenerated, allowNewModules bool
 }
@@ -49,6 +49,7 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&rules.root, "root", "", "destination source tree")
 	flags.StringVar(&rules.goList, "go-list", "", "go list -e -json package stream")
+	flags.StringVar(&rules.moduleDir, "module-dir", ".", "module directory relative to root")
 	flags.BoolVar(&rules.allowGenerated, "allow-generated", false, "allow generated headers")
 	flags.BoolVar(
 		&rules.allowNewModules,
@@ -70,6 +71,10 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 	if rules.root == "" || rules.guarded == nil || flags.NArg() != 0 {
 		return rules, errors.New("expected --root and --guarded with no positional arguments")
 	}
+	if !filepath.IsLocal(rules.moduleDir) {
+		return rules, errors.New("expected --module-dir relative to --root")
+	}
+	rules.moduleDir = filepath.ToSlash(filepath.Clean(rules.moduleDir))
 	return rules, nil
 }
 
@@ -78,7 +83,7 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 	if err != nil {
 		return "", 0, err
 	}
-	loaded, err := readLoaded(rules.goList, rules.root)
+	loaded, err := readLoaded(rules)
 	if err != nil {
 		return "", 0, err
 	}
@@ -89,7 +94,7 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 		if err != nil {
 			return "", 0, fmt.Errorf("check directives in %q: %w", name, err)
 		}
-		if loaded.rejects(name, files[name]) {
+		if !files[name].symlink && loaded.rejects(name, files[name]) {
 			fmt.Fprintf(&log, "%q 1: not loaded by any GOOS build\n", name)
 			count++
 		}
@@ -102,16 +107,34 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 }
 
 func (rules directiveRules) pathFindings(name string, change *fileChange) (map[int]string, error) {
+	if change.symlink {
+		return map[int]string{1: "adds a symlink"}, nil
+	}
+	if findings := rules.newModuleFinding(name, change); findings != nil {
+		return findings, nil
+	}
+	return rules.sourceFindings(name, change.lines)
+}
+
+func (rules directiveRules) newModuleFinding(name string, change *fileChange) map[int]string {
+	if rules.allowNewModules || !change.created {
+		return nil
+	}
 	switch path.Base(name) {
 	case "go.mod", "go.work":
-		if change.created && !rules.allowNewModules {
-			return map[int]string{1: "new Go module or workspace file"}, nil
-		}
+		return map[int]string{1: "new Go module or workspace file"}
 	}
-	if path.Ext(name) != goExtension || len(change.lines) == 0 {
+	return nil
+}
+
+func (rules directiveRules) sourceFindings(name string, added addedLines) (map[int]string, error) {
+	if !rules.allowNewModules && path.Base(name) == "go.mod" && len(added) != 0 {
+		return rules.replaceFindings(name, added)
+	}
+	if path.Ext(name) != goExtension || len(added) == 0 {
 		return map[int]string{}, nil
 	}
-	return rules.fileFindings(name, change.lines)
+	return rules.fileFindings(name, added)
 }
 
 func (rules directiveRules) fileFindings(name string, added addedLines) (map[int]string, error) {
