@@ -163,19 +163,47 @@ func (loaded loadedGo) otherModuleReason(dir string) (string, error) {
 	if loaded.skipOtherModules {
 		return "", nil
 	}
-	if loaded.listedModules != nil && isTestdataPath(dir) {
-		physical, err := physicalPath(filepath.Join(loaded.root, dir))
-		if err != nil {
-			return "", fmt.Errorf("resolve testdata module directory: %w", err)
-		}
-		if !loaded.listedModules[physical] {
-			return "", nil
-		}
+	exempt, err := loaded.unimportedTestdata(dir)
+	if err != nil || exempt {
+		return "", err
 	}
 	return fmt.Sprintf(
 		"belongs to module %q, which this run does not lint",
 		filepath.ToSlash(dir),
 	), nil
+}
+
+// unimportedTestdata reports a testdata module that no listed package belongs
+// to. go list runs with GOWORK=off, so a go.work could build such a module
+// unseen; any go.work turns the exemption off.
+func (loaded loadedGo) unimportedTestdata(dir string) (bool, error) {
+	if loaded.listedModules == nil || !isTestdataPath(dir) {
+		return false, nil
+	}
+	workspace, err := hasWorkspace(loaded.tree, filepath.FromSlash(loaded.moduleDir))
+	if err != nil || workspace {
+		return false, err
+	}
+	physical, err := physicalPath(filepath.Join(loaded.root, dir))
+	if err != nil {
+		return false, fmt.Errorf("resolve testdata module directory: %w", err)
+	}
+	return !loaded.listedModules[physical], nil
+}
+
+func hasWorkspace(root *os.Root, dir string) (bool, error) {
+	for dir = filepath.Clean(dir); ; dir = filepath.Dir(dir) {
+		_, err := root.Lstat(filepath.Join(dir, "go.work"))
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return false, fmt.Errorf("stat go.work: %w", err)
+		}
+		if dir == "." {
+			return false, nil
+		}
+	}
 }
 
 func isTestdataPath(name string) bool {

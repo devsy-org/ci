@@ -215,6 +215,10 @@ func TestDirectiveTestdataModule(t *testing.T) {
 		moduleDir,
 	)
 	assertDirectives(t, input, want+failed, 1)
+
+	input.args[len(input.args)-1] = emptyList
+	directiveFixture(t, root, "go.work", "go 1.26\n\nuse (\n\t.\n\t./"+moduleDir+"\n)\n")
+	assertDirectives(t, input, want+failed, 1)
 }
 
 func TestDirectiveAddedSymlink(t *testing.T) {
