@@ -1,0 +1,33 @@
+name: PR Size
+description: Check changed production lines in a pull request.
+inputs:
+  limit:
+    description: Maximum changed production lines.
+    default: "400"
+  report-only:
+    description: Report the verdict without failing an oversized pull request.
+    default: "false"
+  base-ref:
+    description: Target branch name on origin.
+    default: ${{ github.event.pull_request.base.ref }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      with:
+        go-version-file: ${{ github.action_path }}/../go.mod
+        cache: false
+    - name: Check changed production lines
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        LIMIT: ${{ inputs.limit }}
+        REPORT_ONLY: ${{ inputs.report-only }}
+        # Keep the caller's Go settings from changing how the tool builds.
+        GOFLAGS: -mod=readonly
+        GOTOOLCHAIN: local
+        GOWORK: "off"
+      run: |
+        go run ./cmd/pr-size --repo "$GITHUB_WORKSPACE" --base-ref "$BASE_REF" \
+          --limit "$LIMIT" --report-only="$REPORT_ONLY"
