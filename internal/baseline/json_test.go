@@ -262,3 +262,15 @@ func TestFromJSONCyclopPackageAverage(t *testing.T) {
 		t.Errorf("FromJSON() = %v, want %v", got, want)
 	}
 }
+
+func TestFromJSONSkipsZeroScores(t *testing.T) {
+	t.Parallel()
+
+	const input = `{"Issues":[{"FromLinter":"nestif",` +
+		`"Text":"` + "`if b`" + ` has complex nested blocks (complexity: 0)",` +
+		`"Pos":{"Filename":"source.go","Line":17}}]}`
+	got, err := FromJSON(strings.NewReader(input), "testdata")
+	if err != nil || len(got) != 0 {
+		t.Errorf("FromJSON() = %v, %v, want no entries", got, err)
+	}
+}
