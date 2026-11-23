@@ -28,6 +28,9 @@ inputs:
   allow-new-modules:
     description: Allow new go.mod and go.work files.
     default: "false"
+  dead-code:
+    description: Check the whole Go module for unused code and parameters.
+    default: "true"
 runs:
   using: composite
   steps:
@@ -135,6 +138,7 @@ runs:
         ALLOW_GENERATED: ${{ inputs.allow-generated }}
         ALLOW_NEW_MODULES: ${{ inputs.allow-new-modules }}
         MODULE_DIR: ${{ inputs.working-directory }}
+        DEAD_CODE: ${{ inputs.dead-code }}
       run: |
         tags=$("$RUNNER_TEMP/lint-baseline" config-check --config "$CONFIG" --linters "$BASELINE_LINTERS")
         bash "$GITHUB_ACTION_PATH/with-lint-env.sh" bash -ec '
@@ -145,6 +149,7 @@ runs:
             GOOS=$os CGO_ENABLED=1 go list -e -json="$fields" -deps -test "${args[@]}" ./...
           done > "$RUNNER_TEMP/golist.json"
         ' _ "$tags"
+        [[ $DEAD_CODE != true ]] || GUARDED_LINTERS+=,unused,unparam
         GIT_ATTR_SOURCE=$PR_MERGE_BASE git -c core.quotePath=true -C "$GITHUB_WORKSPACE" diff \
           --no-ext-diff --no-textconv --no-color --no-relative --no-renames --text \
           --src-prefix=a/ --dst-prefix=b/ --unified=0 --inter-hunk-context=0 \
@@ -190,3 +195,14 @@ runs:
         bash "$GITHUB_ACTION_PATH/lint-json.sh" "$CONFIG" "$RUNNER_TEMP/lint.json"
         "$RUNNER_TEMP/lint-baseline" check --lint-json "$RUNNER_TEMP/lint.json" \
           --baseline "$BASELINE" "${base_args[@]}" --root .
+    - name: Check full-tree dead code
+      if: inputs.dead-code == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/with-lint-env.sh" bash -o pipefail -c '
+          golangci-lint run --config "$CONFIG" --enable-only unused,unparam --allow-parallel-runners \
+            --issues-exit-code=1 --path-prefix=./ ./... 2>&1 | tr "\r" " " | sed "s/^/lint:dead: /"
+        '
