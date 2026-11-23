@@ -9,6 +9,8 @@ import (
 	"testing/iotest"
 )
 
+const cyclop = "cyclop"
+
 func TestRoundTrip(t *testing.T) {
 	t.Parallel()
 
