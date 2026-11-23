@@ -102,8 +102,8 @@ func TestMeasure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			linter, value := measure(patterns, tc.linter, tc.message)
-			if linter != tc.wantLinter || value != tc.wantValue {
+			linter, value, measured := measure(patterns, tc.linter, tc.message)
+			if linter != tc.wantLinter || value != tc.wantValue || measured != (tc.wantValue > 0) {
 				t.Errorf(
 					"measure() = (%q, %d), want (%q, %d)",
 					linter,
@@ -113,5 +113,45 @@ func TestMeasure(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestMeasureEdgeValues(t *testing.T) {
+	t.Parallel()
+
+	patterns := metricPatterns()
+	cases := []struct {
+		name, linter, message string
+		want                  int
+		measured              bool
+	}{
+		{nestif, nestif, "`if b` has complex nested blocks (complexity: 0)", 0, true},
+		{
+			"package average",
+			cyclop,
+			"the average complexity for the package fix is 1.003333, max is 1.000000",
+			1003333,
+			true,
+		},
+		{
+			"overflow",
+			cyclop,
+			"calculated cyclomatic complexity for function F is 99999999999999999999, max is 8",
+			0,
+			false,
+		},
+	}
+	for _, tc := range cases {
+		_, value, measured := measure(patterns, tc.linter, tc.message)
+		if value != tc.want || measured != tc.measured {
+			t.Errorf(
+				"%s: measure() = (%d, %t), want (%d, %t)",
+				tc.name,
+				value,
+				measured,
+				tc.want,
+				tc.measured,
+			)
+		}
 	}
 }

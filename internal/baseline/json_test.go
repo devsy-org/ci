@@ -257,7 +257,7 @@ func TestFromJSONCyclopPackageAverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Entry{{"cyclop:package-average", "source.go", "-", 4100}}
+	want := []Entry{{"cyclop:package-average", "source.go", "-", 41006000}}
 	if !slices.Equal(got, want) {
 		t.Errorf("FromJSON() = %v, want %v", got, want)
 	}

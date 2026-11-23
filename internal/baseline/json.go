@@ -86,13 +86,16 @@ func collectEntries(issues []issue, root string) ([]Entry, error) {
 }
 
 func (c *collector) add(finding issue) error {
-	linter, metric := measure(c.patterns, finding.FromLinter, finding.Text)
-	if metric == 0 && isMetricLinter(c.patterns, linter) {
+	linter, metric, measured := measure(c.patterns, finding.FromLinter, finding.Text)
+	if !measured && isMetricLinter(c.patterns, linter) {
 		return fmt.Errorf("unrecognized metric message from %s: %q", linter, finding.Text)
 	}
 	file, err := localFilename(c.root, finding.Pos.Filename)
 	if err != nil {
 		return err
+	}
+	if measured && metric == 0 {
+		return nil
 	}
 	entry := Entry{
 		Linter: linter,
@@ -108,12 +111,16 @@ func (c *collector) add(finding issue) error {
 		values = &findingValues{}
 		c.grouped[entry] = values
 	}
-	if metric > 0 {
-		values.metrics = append(values.metrics, metric)
-	} else {
-		values.count++
-	}
+	values.record(metric, measured)
 	return nil
+}
+
+func (v *findingValues) record(metric int, measured bool) {
+	if measured {
+		v.metrics = append(v.metrics, metric)
+		return
+	}
+	v.count++
 }
 
 // entries ranks metric values from highest to lowest; rank n > 1 gets scope

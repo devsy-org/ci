@@ -17,10 +17,10 @@ func metricPatterns() []metricPattern {
 	const complexity = ` complexity (\d+) \(> max enabled \d+\)$`
 	specs := [...]struct{ linter, expr string }{
 		{"cyclop", `^calculated cyclomatic complexity for function .+ is (\d+), max is \d+$`},
-		// Stored in hundredths, so 41.006 becomes 4100.
+		// Stored in millionths, the precision cyclop prints, so 1.003333 becomes 1003333.
 		{
 			"cyclop:package-average",
-			`^the average complexity for the package .+ is (\d+\.\d{2})\d*, max is \d+(?:\.\d+)?$`,
+			`^the average complexity for the package .+ is (\d+\.\d{6}), max is \d+(?:\.\d+)?$`,
 		},
 		{"funlen:lines", `^Function '[^']+' is too long \((\d+) > \d+\)$`},
 		{"funlen:statements", `^Function '[^']+' has too many statements \((\d+) > \d+\)$`},
@@ -40,7 +40,8 @@ func metricPatterns() []metricPattern {
 	return patterns
 }
 
-func measure(patterns []metricPattern, linter, message string) (string, int) {
+// measure reports the metric value and whether message matched a metric pattern.
+func measure(patterns []metricPattern, linter, message string) (string, int, bool) {
 	if rule, body, ok := strings.Cut(message, ": "); linter == "revive" && ok && rule != "" {
 		linter, message = linter+":"+rule, body
 	}
@@ -51,12 +52,12 @@ func measure(patterns []metricPattern, linter, message string) (string, int) {
 		if match := pattern.regex.FindStringSubmatch(message); match != nil {
 			value, err := strconv.Atoi(strings.Replace(match[1], ".", "", 1))
 			if err != nil {
-				return pattern.linter, 0
+				return pattern.linter, 0, false
 			}
-			return pattern.linter, value
+			return pattern.linter, value, true
 		}
 	}
-	return linter, 0
+	return linter, 0, false
 }
 
 // isMetricLinter reports whether linter has a metric pattern, so an unmatched
