@@ -3,7 +3,10 @@ description: Check Go lint findings against a pull request's baseline.
 inputs:
   baseline:
     description: Baseline path relative to the working directory.
-    default: .lint-baseline.tsv
+    default: .lint-baseline
+  baseline-linters:
+    description: Comma-separated function-level linters recorded in the baseline.
+    default: cyclop,funlen,gocognit,gocyclo,nestif,revive
   config:
     description: Golangci-lint config path relative to the working directory.
     default: .golangci.yaml
@@ -64,10 +67,8 @@ runs:
         check_directory() {
           local dir
           dir=$(dirname -- "$1")
-          if [[ $dir != . ]]; then
-            [[ $(cd -P -- "$dir" && pwd -P) == "$(pwd -P)/$dir" ]] ||
-              fail "expected a $2 directory without symlinks: $dir"
-          fi
+          [[ $dir == . || $(cd -P -- "$dir" && pwd -P) == "$(pwd -P)/$dir" ]] ||
+            fail "expected a $2 directory without symlinks: $dir"
         }
         go_versions() {
           go mod edit -json "$1" 2>/dev/null |
@@ -121,9 +122,7 @@ runs:
         ) || fail "cannot read Go versions from the base and PR go.mod files"
         [[ $version =~ ^([0-9]+\.[0-9]+)(\.[0-9]+|(beta|rc)([0-9]+))?$ ]] ||
           fail "expected an official Go release version"
-        if [[ -n ${BASH_REMATCH[3]} ]]; then
-          version=${BASH_REMATCH[1]}.0-${BASH_REMATCH[3]}.${BASH_REMATCH[4]}
-        fi
+        [[ -z ${BASH_REMATCH[3]} ]] || version=${BASH_REMATCH[1]}.0-${BASH_REMATCH[3]}.${BASH_REMATCH[4]}
 
         # Remove the checkout entry first so a PR symlink cannot redirect the write.
         rm -f -- "$CONFIG"
@@ -139,29 +138,50 @@ runs:
         version: ${{ inputs.golangci-lint-version }}
         install-only: true
         skip-cache: true
+    - name: Probe baseline linters
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CONFIG: ${{ inputs.config }}
+        BASELINE_LINTERS: ${{ inputs.baseline-linters }}
+      run: |
+        [[ $BASELINE_LINTERS =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] ||
+          { printf 'lint-baseline: expected comma-separated linter names in baseline-linters\n' >&2; exit 2; }
+        probe=$(mktemp -d /tmp/lint-baseline.XXXXXX)
+        trap 'rm -rf -- "$probe"' EXIT
+        cp -- "$CONFIG" "$probe/${CONFIG##*/}"
+        cp -- "$GITHUB_ACTION_PATH/probe/probe.go.txt" "$probe/probe.go"
+        cd "$probe" || exit 2
+        version=$(GOTOOLCHAIN=local GOWORK=off go env GOVERSION)
+        printf 'module lintprobe\n\ngo %s\n' "${version#go}" > go.mod
+        bash "$GITHUB_ACTION_PATH/lint-json.sh" "${CONFIG##*/}" probe.json
+        GITHUB_STEP_SUMMARY='' "$RUNNER_TEMP/lint-baseline" update --lint-json probe.json --baseline probe.baseline
+        awk -F '\t' -v enabled=",$BASELINE_LINTERS," '
+          { found[$1 FS $2 FS $3 FS] = 1 }
+          function require(key, scope, name, prefix) {
+            split(key, name, ":")
+            prefix = key FS "probe.go" FS scope FS
+            if (index(enabled, "," name[1] ",") && !(prefix in found)) {
+              print "lint-baseline: probe missing " prefix; failed = 1
+            }
+          }
+          END {
+            require("cyclop", "Big"); require("funlen:statements", "Big"); require("gocognit", "Big")
+            require("revive:argument-limit", "Signature"); require("revive:function-result-limit", "Signature")
+            exit failed
+          }' probe.baseline
     - name: Check lint baseline
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         BASELINE: ${{ inputs.baseline }}
         CONFIG: ${{ inputs.config }}
+        BASELINE_LINTERS: ${{ inputs.baseline-linters }}
         HAS_BASE_BASELINE: ${{ steps.prepare.outputs.has-base-baseline }}
-        GOFLAGS: -mod=readonly
-        GOTOOLCHAIN: local
-        GOWORK: "off"
       run: |
         base_args=(--adopt)
-        if [[ $HAS_BASE_BASELINE == true ]]; then
-          base_args=(--base-baseline "$RUNNER_TEMP/base-lint-baseline.tsv")
-        fi
-        (
-          token=$(openssl rand -hex 16)
-          printf '::stop-commands::%s\n' "$token"
-          trap 'printf "\n::%s::\n" "$token"' EXIT
-          golangci-lint run --config "$CONFIG" --allow-parallel-runners --uniq-by-line=false \
-            --show-stats=false --max-same-issues=0 --max-issues-per-linter=0 --issues-exit-code=0 \
-            --output.text.path= --output.json.path="$RUNNER_TEMP/lint.json" ./...
-        )
+        [[ $HAS_BASE_BASELINE != true ]] || base_args=(--base-baseline "$RUNNER_TEMP/base-lint-baseline.tsv")
+        bash "$GITHUB_ACTION_PATH/lint-json.sh" "$CONFIG" "$RUNNER_TEMP/lint.json"
         "$RUNNER_TEMP/lint-baseline" check --lint-json "$RUNNER_TEMP/lint.json" \
           --baseline "$BASELINE" "${base_args[@]}" --root .
     - name: Check full-tree dead code

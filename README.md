@@ -86,10 +86,18 @@ The action checks that `HEAD` includes `origin/<base-ref>` and compares
 it with that merge base. Both sides need a `go.mod`; lint uses the highest
 Go version named by their `go` and `toolchain` directives.
 It replaces the checkout's `.golangci.yaml` with the merge base copy
-before linting. The config must already exist at the merge base. If the
-base has no `.lint-baseline.tsv`, the PR can add one that matches the
+before linting. The config must already exist at the merge base. The
+action checks directives first, then probes known violations with the
+base config. The probe fails if the config turns off a limit or drops
+findings that share a line. Next it checks `.lint-baseline` against
+`baseline-linters`, which defaults to `cyclop,funlen,gocognit,gocyclo,nestif,revive`.
+These function-level linters report on declaration lines, so a changed-lines
+check can miss growth in a body or multiline signature. Other linters stay
+on the caller's changed-lines check. The full-tree dead-code check runs last.
+
+If the base has no `.lint-baseline`, the PR can add one that matches the
 current findings. Once the file is on the base branch, later PRs can only
-shrink it. The action rejects added bare `//nolint` directives and ones
+shrink it. The directive check rejects added bare `//nolint` directives and ones
 that suppress guarded linters. The defaults are `cyclop`, `funlen`,
 `gocognit`, `gocyclo`, `nestif`, `maintidx` and `revive`.
 It also rejects new Go generated-code headers because golangci-lint

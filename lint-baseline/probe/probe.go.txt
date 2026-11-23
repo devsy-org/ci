@@ -1,0 +1,87 @@
+// Copied into a scratch module by the lint-baseline action probe. Each function
+// breaks limits that are reported on its declaration line, which changed-line
+// lint cannot see when only the body or a later signature line changes.
+package lintprobe
+
+// Big breaks cyclop, funlen and gocognit, all reported on one line.
+func Big(n int) int {
+	total := 0
+	for i := range n {
+		if i%2 == 0 {
+			if i%3 == 0 {
+				total++
+			} else {
+				total--
+			}
+		}
+		if i%5 == 0 && i%7 == 0 {
+			total += 2
+		}
+		if i%11 == 0 || i%13 == 0 {
+			total -= 2
+		}
+		switch {
+		case i%17 == 0:
+			if total > 10 {
+				total *= 2
+			}
+		case i%19 == 0:
+			if total > 20 {
+				total /= 2
+			}
+		case i%23 == 0:
+			for j := range i {
+				if j%2 == 0 {
+					total += 3
+				}
+			}
+		}
+	}
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	total++
+	return total
+}
+
+// Signature breaks the argument and result limits on later signature lines.
+func Signature(
+	a int,
+	b int,
+	c int,
+	d int,
+	e int,
+) (
+	int,
+	int,
+	int,
+	int,
+) {
+	return a, b, c, d + e
+}
