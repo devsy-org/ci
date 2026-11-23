@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -69,23 +70,38 @@ func run(opts options, stdout io.Writer, summaryPath string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
+	if opts.command == updateCommand {
+		return update(opts, stdout, summaryPath, current)
+	}
 	baseline, err := readEntries(opts.baseline, Parse)
 	if err != nil {
 		return 2, err
 	}
-	if opts.command == updateCommand {
-		result := shrink(baseline, current)
-		if err := replaceBaseline(opts.baseline, result.entries); err != nil {
-			return 2, err
-		}
-		verdict := fmt.Sprintf(
-			"Lint baseline updated: %d removed, %d lowered.",
-			result.removed,
-			result.lowered,
-		)
-		return 0, report(stdout, summaryPath, "", verdict)
-	}
 	return check(opts, stdout, summaryPath, compareInputs{current, baseline})
+}
+
+// update creates a missing baseline from every current finding; the check's
+// merge base rule still rejects added keys once a baseline exists on the base.
+func update(opts options, stdout io.Writer, summaryPath string, current []Entry) (int, error) {
+	baseline, err := readEntries(opts.baseline, Parse)
+	created := errors.Is(err, fs.ErrNotExist)
+	if err != nil && !created {
+		return 2, err
+	}
+	result := shrink(baseline, current)
+	verdict := fmt.Sprintf(
+		"Lint baseline updated: %d removed, %d lowered.",
+		result.removed,
+		result.lowered,
+	)
+	if created {
+		result.entries = current
+		verdict = fmt.Sprintf("Lint baseline created: %d entries.", len(current))
+	}
+	if err := replaceBaseline(opts.baseline, result.entries); err != nil {
+		return 2, err
+	}
+	return 0, report(stdout, summaryPath, "", verdict)
 }
 
 type compareInputs struct{ current, baseline []Entry }

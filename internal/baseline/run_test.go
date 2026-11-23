@@ -220,3 +220,22 @@ func fixtureFile(t *testing.T, dir, name, content string) string {
 	}
 	return path
 }
+
+func TestUpdateCreatesMissingBaseline(t *testing.T) {
+	t.Parallel()
+	args := fixtureArgs(t, updateCommand, `{"Issues":[`+hit+`,`+hit+`]}`, "")
+	if err := os.Remove(args[4]); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if want := "Lint baseline created: 1 entries.\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q; want %q", stdout.String(), want)
+	}
+	data, err := os.ReadFile(filepath.Clean(args[4]))
+	if err != nil || string(data) != bigEntry {
+		t.Fatalf("created baseline = %q, %v; want %q", data, err, bigEntry)
+	}
+}
