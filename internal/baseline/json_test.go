@@ -246,3 +246,19 @@ func TestFromJSONRejectsUnknownMetricMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestFromJSONCyclopPackageAverage(t *testing.T) {
+	t.Parallel()
+
+	const input = `{"Issues":[{"FromLinter":"cyclop",` +
+		`"Text":"the average complexity for the package fix is 41.006000, max is 1.000000",` +
+		`"Pos":{"Filename":"source.go","Line":1}}]}`
+	got, err := FromJSON(strings.NewReader(input), "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Entry{{"cyclop:package-average", "source.go", "-", 4100}}
+	if !slices.Equal(got, want) {
+		t.Errorf("FromJSON() = %v, want %v", got, want)
+	}
+}

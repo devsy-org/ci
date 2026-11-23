@@ -17,6 +17,11 @@ func metricPatterns() []metricPattern {
 	const complexity = ` complexity (\d+) \(> max enabled \d+\)$`
 	specs := [...]struct{ linter, expr string }{
 		{"cyclop", `^calculated cyclomatic complexity for function .+ is (\d+), max is \d+$`},
+		// Stored in hundredths, so 41.006 becomes 4100.
+		{
+			"cyclop:package-average",
+			`^the average complexity for the package .+ is (\d+\.\d{2})\d*, max is \d+(?:\.\d+)?$`,
+		},
 		{"funlen:lines", `^Function '[^']+' is too long \((\d+) > \d+\)$`},
 		{"funlen:statements", `^Function '[^']+' has too many statements \((\d+) > \d+\)$`},
 		{"gocognit", "^cognitive complexity (\\d+) of func `[^`]+` is high \\(> \\d+\\)$"},
@@ -44,7 +49,7 @@ func measure(patterns []metricPattern, linter, message string) (string, int) {
 			continue
 		}
 		if match := pattern.regex.FindStringSubmatch(message); match != nil {
-			value, err := strconv.Atoi(match[1])
+			value, err := strconv.Atoi(strings.Replace(match[1], ".", "", 1))
 			if err != nil {
 				return pattern.linter, 0
 			}
@@ -64,10 +69,5 @@ func isMetricLinter(patterns []metricPattern, linter string) bool {
 }
 
 func (p metricPattern) matchesLinter(linter string) bool {
-	switch linter {
-	case "funlen", "revive:function-length":
-		return strings.HasPrefix(p.linter, linter+":")
-	default:
-		return p.linter == linter
-	}
+	return p.linter == linter || strings.HasPrefix(p.linter, linter+":")
 }
