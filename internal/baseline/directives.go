@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build/constraint"
-	"go/parser"
+	"go/scanner"
 	"go/token"
 	"io"
 	"maps"
@@ -110,45 +110,55 @@ func (rules directiveRules) fileFindings(name string, added addedLines) (map[int
 	if src == nil {
 		return nil, errors.New("expected a readable regular source file no larger than 4 MiB")
 	}
-	fset := token.NewFileSet()
-	const mode = parser.ParseComments | parser.SkipObjectResolution
-	file, err := parser.ParseFile(fset, name, src, mode)
-	if err != nil {
-		return nil, fmt.Errorf("parse source: %w", err)
-	}
-	result := directiveFile{fset: fset, added: added, findings: make(map[int]string)}
-	result.markComments(file, rules)
-	if rules.allowGenerated {
-		return result.findings, nil
-	}
-	header, err := parser.ParseFile(fset, name, src, mode|parser.PackageClauseOnly)
-	if err != nil {
-		return nil, fmt.Errorf("parse package clause: %w", err)
-	}
-	for _, group := range header.Comments {
-		for _, comment := range group.List {
-			result.markGeneratedComment(comment, header.Package)
-		}
+	result := directiveFile{added: added, findings: make(map[int]string)}
+	result.scanComments(name, src, rules)
+	if result.generated && !result.headerAdded {
+		first := slices.Min(slices.Collect(maps.Keys(added)))
+		result.findings[first] = "adds code to a generated file"
 	}
 	return result.findings, nil
 }
 
 type directiveFile struct {
-	fset     *token.FileSet
-	added    addedLines
-	findings map[int]string
+	added                  addedLines
+	findings               map[int]string
+	generated, headerAdded bool
 }
 
-func (f directiveFile) markComments(file *ast.File, rules directiveRules) {
-	for _, group := range file.Comments {
-		for _, comment := range group.List {
-			line := f.fset.PositionFor(comment.Slash, false).Line
-			if !f.added[line] {
-				continue
+func (f *directiveFile) scanComments(name string, src []byte, rules directiveRules) {
+	file := token.NewFileSet().AddFile(name, -1, len(src))
+	var lex scanner.Scanner
+	lex.Init(file, src, nil, scanner.ScanComments)
+	// PackageClauseOnly also sees comments through the package clause's semicolon.
+	phase := 0
+	for pos, tok, literal := lex.Scan(); tok != token.EOF; pos, tok, literal = lex.Scan() {
+		if tok == token.COMMENT {
+			line := file.PositionFor(pos, false).Line
+			f.markComment(line, literal, rules)
+			if !rules.allowGenerated && phase < 4 {
+				f.markGeneratedComment(line, literal, phase == 0)
 			}
-			if reason := rules.commentReason(comment.Text); reason != "" {
-				f.findings[line] = reason
-			}
+		} else {
+			phase = packagePhase(tok, phase)
+		}
+	}
+}
+
+func packagePhase(tok token.Token, phase int) int {
+	switch {
+	case tok == token.PACKAGE && phase == 0, phase == 1, phase == 2 && tok == token.SEMICOLON:
+		return phase + 1
+	case phase >= 2:
+		return 4
+	default:
+		return phase
+	}
+}
+
+func (f *directiveFile) markComment(line int, text string, rules directiveRules) {
+	if f.added[line] {
+		if reason := rules.commentReason(text); reason != "" {
+			f.findings[line] = reason
 		}
 	}
 }
@@ -178,20 +188,22 @@ func hasIgnoreTag(expr constraint.Expr) bool {
 	}
 }
 
-func (f directiveFile) markGeneratedComment(comment *ast.Comment, pkg token.Pos) {
-	line := f.fset.PositionFor(comment.Slash, false).Line
-	block, isBlock := strings.CutPrefix(comment.Text, "/*")
-	lax := (&ast.CommentGroup{List: []*ast.Comment{comment}}).Text()
-	if isBlock {
-		// Keep blank block-comment lines so the marker retains its physical line number.
-		lax = strings.TrimSuffix(block, "*/")
-	}
-	laxLines := strings.Split(lax, "\n")
-	for i, text := range strings.Split(comment.Text, "\n") {
-		if f.added[line+i] &&
-			(laxGenerated(laxLines[i]) || (comment.Slash < pkg && strictGenerated(text))) {
-			f.findings[line+i] = "new Go generated-code header"
+func (f *directiveFile) markGeneratedComment(line int, text string, beforePackage bool) {
+	if block, ok := strings.CutPrefix(text, "/*"); ok {
+		for offset, part := range strings.Split(strings.TrimSuffix(block, "*/"), "\n") {
+			f.markGenerated(line+offset, laxGenerated(part))
 		}
+		return
+	}
+	doc := (&ast.CommentGroup{List: []*ast.Comment{{Text: text}}}).Text()
+	f.markGenerated(line, laxGenerated(doc) || (beforePackage && strictGenerated(text)))
+}
+
+func (f *directiveFile) markGenerated(line int, matches bool) {
+	f.generated = f.generated || matches
+	if matches && f.added[line] {
+		f.headerAdded = true
+		f.findings[line] = "new Go generated-code header"
 	}
 }
 
