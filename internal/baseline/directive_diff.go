@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+const deletedPath = "/dev/null"
+
 type diffState struct {
 	file, gitPaths, newFile    string
 	before, after              hunkRange
@@ -39,8 +41,11 @@ func collectAddedLines(input io.Reader) (map[string]*fileChange, error) {
 		if state.newFile != "" {
 			fileChanges(files, state.newFile).created = true
 		}
-		if number != 0 {
+		switch {
+		case number != 0:
 			fileChanges(files, state.file).lines[number] = true
+		case state.survives():
+			fileChanges(files, state.file)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -51,6 +56,8 @@ func collectAddedLines(input io.Reader) (map[string]*fileChange, error) {
 	}
 	return files, nil
 }
+
+func (d diffState) survives() bool { return d.hunk && d.file != deletedPath }
 
 func fileChanges(files map[string]*fileChange, name string) *fileChange {
 	if files[name] == nil {
@@ -184,7 +191,7 @@ func diffDestination(line, header, pathPrefix string) (string, error) {
 		}
 		path = decoded
 	}
-	if path == "/dev/null" {
+	if path == deletedPath {
 		return path, nil
 	}
 	path, ok = strings.CutPrefix(path, pathPrefix)
@@ -210,7 +217,7 @@ func (d *diffState) startHunk(header string) error {
 
 func (d diffState) validRanges(before, after hunkRange) bool {
 	return (before.remaining != 0 || after.remaining != 0) &&
-		(d.file != "/dev/null" || after.remaining == 0)
+		(d.file != deletedPath || after.remaining == 0)
 }
 
 func parseHunkRange(field, prefix string) (hunkRange, bool) {

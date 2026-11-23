@@ -95,7 +95,11 @@ func TestDirectiveNewModules(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			input := directiveTest{args: []string{rootFlag, t.TempDir(), guardFlag}, diff: tc.patch}
+			root := t.TempDir()
+			if tc.name == "existing module" {
+				fixtureFile(t, root, tc.file, "module example.com/mod\n\ngo 1.25.0\n")
+			}
+			input := directiveTest{args: []string{rootFlag, root, guardFlag}, diff: tc.patch}
 			if tc.want == failed {
 				want := `"` + tc.file + `" 1: new Go module or workspace file` + "\n" + failed
 				assertDirectives(t, input, want, 1)
@@ -328,7 +332,7 @@ func TestDirectiveSourceErrors(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	args := []string{rootFlag, root, guardFlag}
-	diff := addedHunk + "+contents\n"
+	diff := "--- a/new.go\n+++ b/new.go\n@@ -1,0 +2 @@\n+contents\n"
 	bad := fixtureFile(t, root, "bad.go", sourcePkg+"func\n")
 	link := filepath.Join(root, "new.go")
 	if err := os.Symlink(bad, link); err != nil {

@@ -10,16 +10,20 @@ import (
 	"go/token"
 	"io"
 	"maps"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-const directivesCommand = "directives"
+const (
+	directivesCommand = "directives"
+	goMod             = "go.mod"
+)
 
 type directiveRules struct {
-	root                            string
+	root, goList, moduleDir         string
 	guarded                         map[string]bool
 	allowGenerated, allowNewModules bool
 }
@@ -48,6 +52,8 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 	flags := flag.NewFlagSet(directivesCommand, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&rules.root, "root", "", "destination source tree")
+	flags.StringVar(&rules.goList, "go-list", "", "go list -e -json -deps -test package stream")
+	flags.StringVar(&rules.moduleDir, "module-dir", ".", "module directory relative to root")
 	flags.BoolVar(&rules.allowGenerated, "allow-generated", false, "allow generated headers")
 	flags.BoolVar(
 		&rules.allowNewModules,
@@ -69,6 +75,10 @@ func parseDirectiveFlags(args []string) (directiveRules, error) {
 	if rules.root == "" || rules.guarded == nil || flags.NArg() != 0 {
 		return rules, errors.New("expected --root and --guarded with no positional arguments")
 	}
+	if !filepath.IsLocal(rules.moduleDir) {
+		return rules, errors.New("expected --module-dir relative to --root")
+	}
+	rules.moduleDir = filepath.ToSlash(filepath.Clean(rules.moduleDir))
 	return rules, nil
 }
 
@@ -77,10 +87,19 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 	if err != nil {
 		return "", 0, err
 	}
+	root, err := os.OpenRoot(rules.root)
+	if err != nil {
+		return "", 0, fmt.Errorf("open directive root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	loaded, err := readLoaded(root, rules)
+	if err != nil {
+		return "", 0, err
+	}
 	var log strings.Builder
-	count := 0
+	count := loaded.reportImports(&log)
 	for _, name := range slices.Sorted(maps.Keys(files)) {
-		findings, err := rules.pathFindings(name, files[name])
+		findings, err := rules.findings(name, files[name], loaded)
 		if err != nil {
 			return "", 0, fmt.Errorf("check directives in %q: %w", name, err)
 		}
@@ -92,17 +111,52 @@ func scanDirectives(input io.Reader, rules directiveRules) (string, int, error) 
 	return log.String(), count, nil
 }
 
-func (rules directiveRules) pathFindings(name string, change *fileChange) (map[int]string, error) {
-	switch path.Base(name) {
-	case "go.mod", "go.work":
-		if change.created && !rules.allowNewModules {
-			return map[int]string{1: "new Go module or workspace file"}, nil
+func (r directiveRules) findings(name string, c *fileChange, l loadedGo) (map[int]string, error) {
+	link, err := addedLink(l.tree, name, c.created)
+	if err != nil || link {
+		return map[int]string{1: "adds a symlink"}, err
+	}
+	findings, err := r.source(name, c)
+	if err != nil {
+		return nil, err
+	}
+	rejected, err := l.rejects(name)
+	if rejected && findings[1] == "" {
+		findings[1] = "not loaded by any GOOS build"
+	}
+	return findings, err
+}
+
+func addedLink(root *os.Root, name string, created bool) (bool, error) {
+	if !created {
+		return false, nil
+	}
+	info, err := root.Lstat(filepath.FromSlash(name))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat destination: %w", err)
+	}
+	return info.Mode()&os.ModeSymlink != 0, nil
+}
+
+func (r directiveRules) source(name string, change *fileChange) (map[int]string, error) {
+	if !r.allowNewModules {
+		switch path.Base(name) {
+		case goMod, "go.work":
+			if change.created {
+				return map[int]string{1: "new Go module or workspace file"}, nil
+			}
+			if len(change.lines) != 0 {
+				return r.manifest(name, change.lines)
+			}
 		}
 	}
-	if path.Ext(name) != ".go" || len(change.lines) == 0 {
+	if path.Ext(name) != goExtension || len(change.lines) == 0 {
 		return map[int]string{}, nil
 	}
-	return rules.fileFindings(name, change.lines)
+	return r.fileFindings(name, change.lines)
 }
 
 func (rules directiveRules) fileFindings(name string, added addedLines) (map[int]string, error) {
