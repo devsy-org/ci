@@ -20,7 +20,15 @@ type loadedGo struct {
 	files, allowed   map[string]bool
 	listedModules    map[string]bool
 	imports          map[packageImport]bool
+	workspace        *workspaceSearch
 	skipOtherModules bool
+}
+
+// workspaceSearch remembers whether the tree has a go.work, so the walk runs
+// at most once per check.
+type workspaceSearch struct {
+	done, found bool
+	err         error
 }
 
 type packageImport struct{ importer, imported string }
@@ -60,6 +68,7 @@ func readLoaded(tree *os.Root, rules directiveRules) (loadedGo, error) {
 	loaded.files, loaded.allowed = map[string]bool{}, map[string]bool{}
 	loaded.listedModules = map[string]bool{}
 	loaded.imports = map[packageImport]bool{}
+	loaded.workspace = &workspaceSearch{}
 	return loaded, errors.Join(loaded.decode(file), file.Close())
 }
 
@@ -181,7 +190,7 @@ func (loaded loadedGo) unimportedTestdata(dir string) (bool, error) {
 	if loaded.listedModules == nil || !isTestdataPath(dir) {
 		return false, nil
 	}
-	workspace, err := hasWorkspace(loaded.tree)
+	workspace, err := loaded.hasWorkspace()
 	if err != nil || workspace {
 		return false, err
 	}
@@ -194,12 +203,21 @@ func (loaded loadedGo) unimportedTestdata(dir string) (bool, error) {
 
 var errWorkspaceFound = errors.New("go.work found")
 
+func (loaded loadedGo) hasWorkspace() (bool, error) {
+	search := loaded.workspace
+	if !search.done {
+		search.found, search.err = hasWorkspace(loaded.tree)
+		search.done = true
+	}
+	return search.found, search.err
+}
+
 func hasWorkspace(root *os.Root) (bool, error) {
 	err := fs.WalkDir(root.FS(), ".", func(_ string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.Name() == "go.work" {
+		if entry.Name() == "go.work" && !entry.IsDir() {
 			return errWorkspaceFound
 		}
 		if entry.IsDir() && entry.Name() == ".git" {
