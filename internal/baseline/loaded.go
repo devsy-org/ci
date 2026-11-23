@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -174,13 +175,13 @@ func (loaded loadedGo) otherModuleReason(dir string) (string, error) {
 }
 
 // unimportedTestdata reports a testdata module that no listed package belongs
-// to. go list runs with GOWORK=off, so a go.work could build such a module
-// unseen; any go.work turns the exemption off.
+// to. go list runs with GOWORK=off, so a go.work anywhere in the repo could
+// build such a module unseen; any go.work turns the exemption off.
 func (loaded loadedGo) unimportedTestdata(dir string) (bool, error) {
 	if loaded.listedModules == nil || !isTestdataPath(dir) {
 		return false, nil
 	}
-	workspace, err := hasWorkspace(loaded.tree, filepath.FromSlash(loaded.moduleDir))
+	workspace, err := hasWorkspace(loaded.tree)
 	if err != nil || workspace {
 		return false, err
 	}
@@ -191,19 +192,28 @@ func (loaded loadedGo) unimportedTestdata(dir string) (bool, error) {
 	return !loaded.listedModules[physical], nil
 }
 
-func hasWorkspace(root *os.Root, dir string) (bool, error) {
-	for dir = filepath.Clean(dir); ; dir = filepath.Dir(dir) {
-		_, err := root.Lstat(filepath.Join(dir, "go.work"))
-		if err == nil {
-			return true, nil
+var errWorkspaceFound = errors.New("go.work found")
+
+func hasWorkspace(root *os.Root) (bool, error) {
+	err := fs.WalkDir(root.FS(), ".", func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return false, fmt.Errorf("stat go.work: %w", err)
+		if entry.Name() == "go.work" {
+			return errWorkspaceFound
 		}
-		if dir == "." {
-			return false, nil
+		if entry.IsDir() && entry.Name() == ".git" {
+			return fs.SkipDir
 		}
+		return nil
+	})
+	if errors.Is(err, errWorkspaceFound) {
+		return true, nil
 	}
+	if err != nil {
+		return false, fmt.Errorf("find go.work: %w", err)
+	}
+	return false, nil
 }
 
 func isTestdataPath(name string) bool {
