@@ -57,7 +57,7 @@ func readSource(root, file string) []byte {
 	if err != nil {
 		return nil
 	}
-	defer dir.Close()
+	defer func() { _ = dir.Close() }()
 	info, err := dir.Lstat(file)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSourceBytes {
 		return nil
