@@ -39,17 +39,34 @@ func readScopes(root, file string) []funcScope {
 	if filepath.Ext(file) != ".go" || !filepath.IsLocal(file) {
 		return nil
 	}
-	path := filepath.Join(root, file)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSourceBytes {
+	src := readSource(root, file)
+	if src == nil {
 		return nil
 	}
 	fset := token.NewFileSet()
-	tree, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	tree, err := parser.ParseFile(fset, file, src, parser.SkipObjectResolution)
 	if err != nil {
 		return nil
 	}
 	return collectScopes(fset, tree)
+}
+
+// readSource reads through os.Root so symlinked directories cannot escape root.
+func readSource(root, file string) []byte {
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return nil
+	}
+	defer dir.Close()
+	info, err := dir.Lstat(file)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSourceBytes {
+		return nil
+	}
+	src, err := dir.ReadFile(file)
+	if err != nil || len(src) > maxSourceBytes {
+		return nil
+	}
+	return src
 }
 
 func collectScopes(fset *token.FileSet, tree *ast.File) []funcScope {

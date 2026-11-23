@@ -44,3 +44,27 @@ func TestScopeSkipsOversizeFile(t *testing.T) {
 		t.Errorf("scope() = %q, want -", got)
 	}
 }
+
+func TestScopeSkipsSymlinkedDirectoryOutsideRoot(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks may require elevated permissions")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(outside, "f.go"),
+		[]byte("package p\nfunc F() {}\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "dir")); err != nil {
+		t.Fatal(err)
+	}
+	cache := scopeCache{root: root, files: map[string][]funcScope{}}
+	if got := cache.scope("dir/f.go", 2); got != "-" {
+		t.Errorf("scope() = %q, want -", got)
+	}
+}
