@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"go/token"
 	"io"
-	"maps"
-	"math"
 	"path/filepath"
 	"slices"
+	"strconv"
 )
 
 const maxJSONBytes = 64 << 20
@@ -52,33 +51,90 @@ func readIssues(r io.Reader, limit int64) ([]issue, error) {
 	return *report.Issues, nil
 }
 
+type collector struct {
+	root     string
+	patterns []metricPattern
+	cache    scopeCache
+	grouped  map[Entry]*findingValues
+}
+
+// findingValues keeps every metric value of a key so one block cannot get
+// worse while another improves by the same amount.
+type findingValues struct {
+	count   int
+	metrics []int
+}
+
 func collectEntries(issues []issue, root string) ([]Entry, error) {
-	patterns := metricPatterns()
-	cache := scopeCache{root: root, files: map[string][]funcScope{}}
-	grouped := make(map[Entry]int)
+	c := collector{
+		root:     root,
+		patterns: metricPatterns(),
+		cache:    scopeCache{root: root, files: map[string][]funcScope{}},
+		grouped:  make(map[Entry]*findingValues),
+	}
 	for i, finding := range issues {
-		linter, metric := measure(patterns, finding.FromLinter, finding.Text)
-		file, err := localFilename(root, finding.Pos.Filename)
-		if err != nil {
+		if err := c.add(finding); err != nil {
 			return nil, fmt.Errorf("lint finding %d: %w", i+1, err)
 		}
-		scope := cache.scope(file, finding.Pos.Line)
-		entry := Entry{Linter: linter, File: file, Scope: scope, Value: 1}
-		if err := validateEntry(entry); err != nil {
-			return nil, fmt.Errorf("lint finding %d: %w", i+1, err)
-		}
-		value := cmp.Or(metric, 1)
-		if value > math.MaxInt-grouped[entry] {
-			return nil, fmt.Errorf("lint finding %d: total value overflows int", i+1)
-		}
-		grouped[entry] += value
 	}
-	entries := make([]Entry, 0, len(grouped))
-	for _, key := range slices.SortedFunc(maps.Keys(grouped), compareEntries) {
-		key.Value = grouped[key]
-		entries = append(entries, key)
+	var entries []Entry
+	for key, values := range c.grouped {
+		entries = append(entries, values.entries(key)...)
 	}
+	slices.SortFunc(entries, compareEntries)
 	return entries, nil
+}
+
+func (c *collector) add(finding issue) error {
+	linter, metric := measure(c.patterns, finding.FromLinter, finding.Text)
+	file, err := localFilename(c.root, finding.Pos.Filename)
+	if err != nil {
+		return err
+	}
+	entry := Entry{
+		Linter: linter,
+		File:   file,
+		Scope:  c.cache.scope(file, finding.Pos.Line),
+		Value:  1,
+	}
+	if err := validateEntry(entry); err != nil {
+		return err
+	}
+	values := c.grouped[entry]
+	if values == nil {
+		values = &findingValues{}
+		c.grouped[entry] = values
+	}
+	if metric > 0 {
+		values.metrics = append(values.metrics, metric)
+	} else {
+		values.count++
+	}
+	return nil
+}
+
+// entries ranks metric values from highest to lowest; rank n > 1 gets scope
+// suffix "@n".
+func (v *findingValues) entries(key Entry) []Entry {
+	if len(v.metrics) == 0 {
+		key.Value = v.count
+		return []Entry{key}
+	}
+	values := slices.Clone(v.metrics)
+	for range v.count {
+		values = append(values, 1)
+	}
+	slices.SortFunc(values, func(a, b int) int { return cmp.Compare(b, a) })
+	entries := make([]Entry, 0, len(values))
+	for i, value := range values {
+		entry := key
+		entry.Value = value
+		if i > 0 {
+			entry.Scope += "@" + strconv.Itoa(i+1)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 func localFilename(root, file string) (string, error) {

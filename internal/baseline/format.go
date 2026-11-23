@@ -3,6 +3,7 @@ package baseline
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"errors"
 	"fmt"
@@ -44,11 +45,16 @@ func Write(w io.Writer, entries []Entry) error {
 			return fmt.Errorf("baseline entry %d: duplicate key", i+1)
 		}
 	}
+	var out bytes.Buffer
 	for _, entry := range sorted {
 		fields := []string{entry.Linter, entry.File, entry.Scope, strconv.Itoa(entry.Value)}
-		if _, err := io.WriteString(w, strings.Join(fields, "\t")+"\n"); err != nil {
-			return fmt.Errorf("write baseline: %w", err)
+		out.WriteString(strings.Join(fields, "\t") + "\n")
+		if out.Len() > maxBaselineBytes {
+			return fmt.Errorf("baseline exceeds %d bytes", maxBaselineBytes)
 		}
+	}
+	if _, err := out.WriteTo(w); err != nil {
+		return fmt.Errorf("write baseline: %w", err)
 	}
 	return nil
 }

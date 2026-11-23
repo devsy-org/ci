@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -52,17 +53,22 @@ func readScopes(root, file string) []funcScope {
 }
 
 // readSource reads through os.Root so symlinked directories cannot escape root.
-func readSource(root, file string) []byte {
+func readSource(root, name string) []byte {
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		return nil
 	}
 	defer func() { _ = dir.Close() }()
-	info, err := dir.Lstat(file)
+	info, err := dir.Lstat(name)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSourceBytes {
 		return nil
 	}
-	src, err := dir.ReadFile(file)
+	file, err := dir.Open(name)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = file.Close() }()
+	src, err := io.ReadAll(io.LimitReader(file, maxSourceBytes+1))
 	if err != nil || len(src) > maxSourceBytes {
 		return nil
 	}

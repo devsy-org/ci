@@ -142,3 +142,26 @@ func TestWriteInvalid(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	const suffix = "\ta.go\t-\t1\n"
+	key := strings.Repeat("x", maxBaselineBytes-len(suffix))
+	var out strings.Builder
+	if err := Write(&out, []Entry{{key, "a.go", "-", 1}}); err != nil {
+		t.Fatalf("Write() at limit: %v", err)
+	}
+	if _, err := Parse(strings.NewReader(out.String())); err != nil {
+		t.Errorf("Parse(Write()) at limit: %v", err)
+	}
+	out.Reset()
+	err := Write(&out, []Entry{{key + "x", "a.go", "-", 1}})
+	if err == nil || !strings.Contains(err.Error(), "baseline exceeds") || out.Len() != 0 {
+		t.Errorf(
+			"Write() above limit = %v and %d bytes, want size error and no output",
+			err,
+			out.Len(),
+		)
+	}
+}

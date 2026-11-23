@@ -37,7 +37,8 @@ func TestFromJSON(t *testing.T) {
 	const unused = "unused"
 	want := []Entry{
 		{cyclop, source, outer, 2},
-		{"nestif", source, outer, 12},
+		{nestif, source, outer, 8},
+		{nestif, source, outer + "@2", 4},
 		{unused, "README.md", "-", 1},
 		{unused, "missing.go", "-", 1},
 		{unused, source, "-", 1},
@@ -65,7 +66,6 @@ func TestFromGolangCILintJSON(t *testing.T) {
 funlen:statements	big.go	Big	152
 funlen:statements	res.go	L	22
 gocognit	big.go	Big	300
-nestif	big.go	Big	180
 revive:argument-limit	big.go	Big	6
 revive:cognitive-complexity	big.go	Big	300
 revive:cyclomatic	big.go	Big	121
@@ -80,6 +80,11 @@ revive:max-control-nesting	big.go	Big	30
 	if err != nil {
 		t.Fatal(err)
 	}
+	want = append(want, Entry{nestif, "big.go", "Big", 6})
+	for rank := 2; rank <= 30; rank++ {
+		want = append(want, Entry{nestif, "big.go", fmt.Sprintf("Big@%d", rank), 6})
+	}
+	slices.SortFunc(want, compareEntries)
 	if !slices.Equal(got, want) {
 		t.Errorf("FromJSON() = %#v, want %#v", got, want)
 	}
@@ -196,5 +201,36 @@ func TestFromJSONRepeatedInit(t *testing.T) {
 	want := []Entry{{cyclop, source, "init", 12}, {cyclop, source, "init#2", 9}}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("FromJSON() = (%v, %v), want %v", got, err, want)
+	}
+}
+
+func TestFromJSONRanksMetricValues(t *testing.T) {
+	t.Parallel()
+
+	report := func(first, second int) string {
+		const finding = `{"FromLinter":"nestif","Text":"` + "`if x`" + ` has complex nested blocks (complexity: %d)",` +
+			`"Pos":{"Filename":"source.go","Line":17}}`
+		return `{"Issues":[` + fmt.Sprintf(
+			finding,
+			first,
+		) + "," + fmt.Sprintf(
+			finding,
+			second,
+		) + `]}`
+	}
+	before, err := FromJSON(strings.NewReader(report(8, 6)), "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := FromJSON(strings.NewReader(report(5, 9)), "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const source = "source.go"
+	const outer = "Outer"
+	wantBefore := []Entry{{nestif, source, outer, 8}, {nestif, source, outer + "@2", 6}}
+	wantAfter := []Entry{{nestif, source, outer, 9}, {nestif, source, outer + "@2", 5}}
+	if !slices.Equal(before, wantBefore) || !slices.Equal(after, wantAfter) {
+		t.Errorf("FromJSON() = %v then %v, want %v then %v", before, after, wantBefore, wantAfter)
 	}
 }

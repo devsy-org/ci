@@ -2,7 +2,10 @@ package baseline
 
 import "testing"
 
-const cyclop = "cyclop"
+const (
+	cyclop = "cyclop"
+	nestif = "nestif"
+)
 
 func TestMeasure(t *testing.T) {
 	t.Parallel()
@@ -10,7 +13,6 @@ func TestMeasure(t *testing.T) {
 	const revive = "revive"
 	const funlen = "funlen"
 	const gocognit = "gocognit"
-	const nestif = "nestif"
 	cases := []struct {
 		name, linter, message, wantLinter string
 		wantValue                         int
@@ -37,7 +39,7 @@ func TestMeasure(t *testing.T) {
 			gocognit,
 			300,
 		},
-		{"nestif", nestif, "`if len(s) >= 4` has complex nested blocks (complexity: 3)", nestif, 3},
+		{nestif, nestif, "`if len(s) >= 4` has complex nested blocks (complexity: 3)", nestif, 3},
 		{
 			"arguments",
 			revive,
