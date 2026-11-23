@@ -364,6 +364,30 @@ func TestInspectNULReplacement(t *testing.T) {
 	}
 }
 
+func TestInspectSkippedBinaryRenames(t *testing.T) {
+	t.Parallel()
+	git, dir := initFixture(t)
+	text := strings.Repeat("original text\n", 300)
+	writeFixture(t, dir, "original.txt", text)
+	writeFixture(t, dir, "original.png", "\x00pixels\n")
+	base := commitBase(t, git)
+	gitOK(t, git, "mv", "original.png", "renamed.png")
+	gitOK(t, git, "mv", "original.txt", "renamed.bin")
+	writeFixture(t, dir, "renamed.bin", text+"\x00\n")
+	gitOK(t, git, "add", ".")
+	commitFixture(t, git, base)
+
+	got, err := inspect(git, "main")
+	want := totals{production: {files: 2}}
+	if err != nil || got.totals != want ||
+		!slices.Equal(
+			slices.Sorted(slices.Values(got.skippedBinary)),
+			[]string{"renamed.bin", "renamed.png"},
+		) {
+		t.Errorf("inspect = %+v, %v; want %+v and both rename destinations", got, err, want)
+	}
+}
+
 func TestInspectRenameWithEdits(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

@@ -131,11 +131,7 @@ func TestVerdictUnreadableEvent(t *testing.T) {
 func TestRenderFailure(t *testing.T) {
 	t.Parallel()
 
-	got := renderReport(
-		inspection{totals: totals{production: {files: 1, lines: 401}}},
-		"FAIL",
-		false,
-	)
+	got := renderSummary(renderLog(totals{production: {files: 1, lines: 401}}, "FAIL"), nil, false)
 	for _, want := range []string{
 		"| Config | 0 | 0 | no |", "| Production | 1 | 401 | yes |",
 		"\nFAIL\n", "add the `size-exception` label", "`Size exception:`", "20 characters",
@@ -152,10 +148,10 @@ func TestRenderFailure(t *testing.T) {
 func TestRenderSkippedBinary(t *testing.T) {
 	t.Parallel()
 
-	result := inspection{skippedBinary: []string{"z.png", "a`<br>\n\x1b\xff.png"}}
-	got := renderReport(result, "PASS", true)
-	want := "| Production | 0 | 0 | yes |\n\nBinary files not counted:\n\n" +
-		"- `a\\x60<br>\\n\\x1b\\xff.png`\n- `z.png`\n\nPASS\n"
+	paths := []string{"z.png", "a`<br>\n\x1b\xff.png"}
+	got := renderSummary(renderLog(totals{}, "PASS"), paths, true)
+	want := "| Production | 0 | 0 | yes |\n\nPASS\n\nBinary files not counted:\n\n" +
+		"- `a\\x60<br>\\n\\x1b\\xff.png`\n- `z.png`\n"
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("report = %q, want suffix %q", got, want)
 	}
@@ -164,16 +160,40 @@ func TestRenderSkippedBinary(t *testing.T) {
 func TestRenderSkippedBinaryCap(t *testing.T) {
 	t.Parallel()
 
-	var result inspection
+	var paths []string
 	for i := 52; i > 0; i-- {
-		result.skippedBinary = append(result.skippedBinary, fmt.Sprintf("image-%02d.png", i))
+		paths = append(paths, fmt.Sprintf("image-%02d.png", i))
 	}
-	got := renderReport(result, "PASS", true)
+	got := renderSummary(renderLog(totals{}, "PASS"), paths, true)
 	if count := strings.Count(got, "\n- `"); count != 50 {
 		t.Errorf("report lists %d binary files, want 50", count)
 	}
 	if !strings.Contains(got, "- `image-50.png`\n- and 2 more\n") ||
 		strings.Contains(got, "- `image-51.png`") || strings.Contains(got, "- `image-52.png`") {
 		t.Errorf("report does not keep the first 50 paths in sorted order:\n%s", got)
+	}
+}
+
+func TestRenderSummaryByteBudget(t *testing.T) {
+	t.Parallel()
+
+	log := renderLog(totals{}, "FAIL")
+	prefix := renderSummary(log, nil, false) + "\nBinary files not counted:\n\n"
+	const footer = "- and 2 more\n"
+	room := 64*1024 - len(prefix) - len(footer) - len("- `a.png`\n") - 1
+	path := "a" + strings.Repeat("`", room/4) + strings.Repeat("x", room%4) + ".png"
+	want := prefix + "- `" + strings.ReplaceAll(path, "`", `\x60`) + "`\n" + footer
+	got := renderSummary(log, []string{"last.png", path, "b.png"}, false)
+	if got != want {
+		t.Errorf("budgeted summary = %d bytes, ends with expected footer: %t; want %d bytes",
+			len(got), strings.HasSuffix(got, footer), len(want))
+	}
+
+	got = renderSummary(log, []string{path + "x", "last.png"}, false)
+	if got != prefix+footer {
+		t.Errorf(
+			"summary should omit all paths when the first exceeds the budget: got %d bytes",
+			len(got),
+		)
 	}
 }

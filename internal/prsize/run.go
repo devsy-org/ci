@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -19,14 +20,14 @@ func Run(ctx context.Context, opts Options, positional int) int {
 		fmt.Fprintln(os.Stderr, "pr-size: expected --base-ref and a nonnegative --limit")
 		return 2
 	}
-	code, err := run(ctx, opts)
+	code, err := run(ctx, opts, os.Stdout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pr-size:", err)
 	}
 	return code
 }
 
-func run(ctx context.Context, opts Options) (int, error) {
+func run(ctx context.Context, opts Options, stdout io.Writer) (int, error) {
 	result, err := inspect(gitRunner(ctx, opts.Repo), opts.BaseRef)
 	if err != nil {
 		return 2, err
@@ -41,11 +42,16 @@ func run(ctx context.Context, opts Options) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	report := renderReport(result, message, passed)
-	if _, err := os.Stdout.WriteString(report); err != nil {
+	log := renderLog(result.totals, message)
+	if _, err := io.WriteString(stdout, log); err != nil {
 		return 2, fmt.Errorf("write size report: %w", err)
 	}
-	if err := writeSummary(os.Getenv("GITHUB_STEP_SUMMARY"), report); err != nil {
+	if err := writeSummary(
+		os.Getenv("GITHUB_STEP_SUMMARY"),
+		log,
+		result.skippedBinary,
+		passed,
+	); err != nil {
 		return 2, err
 	}
 	if !passed && !opts.ReportOnly {
@@ -54,7 +60,7 @@ func run(ctx context.Context, opts Options) (int, error) {
 	return 0, nil
 }
 
-func writeSummary(path, report string) error {
+func writeSummary(path, log string, paths []string, passed bool) error {
 	if path == "" {
 		return nil
 	}
@@ -63,7 +69,7 @@ func writeSummary(path, report string) error {
 	if err != nil {
 		return fmt.Errorf("open GitHub step summary: %w", err)
 	}
-	_, err = summary.WriteString(report)
+	_, err = summary.WriteString(renderSummary(log, paths, passed))
 	if err := errors.Join(err, summary.Close()); err != nil {
 		return fmt.Errorf("write GitHub step summary: %w", err)
 	}
