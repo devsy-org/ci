@@ -64,8 +64,7 @@ adds findings or leaves stale entries in its baseline. Run it in its own
 job on `pull_request` with a read-only token and no secrets. Check out the
 caller repo at the default PR merge ref with `fetch-depth: 0`; the action
 does not fetch refs.
-It needs Git 2.41 or later and Mike Farah's yq v4, which `ubuntu-latest`
-includes. Replace `<sha>` with the commit SHA to pin.
+It needs Git 2.41 or later. Replace `<sha>` with the commit SHA to pin.
 
 ```yaml
 on:
@@ -88,7 +87,9 @@ it with that merge base. Both sides need a `go.mod`; lint uses the highest
 Go version named by their `go` and `toolchain` directives.
 It replaces the checkout's `.golangci.yaml` with the merge base copy
 before linting. The config must already exist at the merge base. The action
-rejects `revive.config`, custom linters, and plugin keys. It passes only
+rejects `revive.config`, custom linters, and plugin keys. Use one YAML
+document with string keys only. Aliases and merge keys cannot serve as
+mapping keys. The action passes only
 allowlisted linters to `--enable-only`, so goheader, depguard, and gocritic
 cannot run through this action. It checks directives, then probes known violations with the
 base config. The probe fails if the config turns off a limit or drops

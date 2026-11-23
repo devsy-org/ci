@@ -136,21 +136,13 @@ runs:
         ALLOW_NEW_MODULES: ${{ inputs.allow-new-modules }}
         MODULE_DIR: ${{ inputs.working-directory }}
       run: |
-        allowed='cyclop|funlen|gocognit|gocyclo|nestif|revive'
-        [[ $BASELINE_LINTERS =~ ^($allowed)(,($allowed))*$ ]] ||
-          { echo 'lint-baseline: expected comma-separated linter names in baseline-linters from the allowlist' >&2; exit 2; }
-        yq --version 2>/dev/null | grep -Eq 'github.com/mikefarah/yq/.* version v4\.' ||
-          { echo 'lint-baseline: Mike Farah yq v4 is required' >&2; exit 2; }
-        blocked=$(yq -r 'explode(.) | .. | path | map(select(tag == "!!str") | downcase) | join(".") |
-          select(test("(^|[.])plugins($|[.])|^linters[.]settings[.](custom|revive[.]config)($|[.])"))' -- "$CONFIG")
-        [[ -z $blocked ]] || { echo 'lint-baseline: base config uses revive.config, custom linters or plugins' >&2; exit 2; }
-        tags=$(yq -r 'explode(.) | (.. | select(tag == "!!map")) |= with_entries(.key |= downcase) |
-          (.run.build-tags // []) | join(",")' -- "$CONFIG")
+        tags=$("$RUNNER_TEMP/lint-baseline" config-check --config "$CONFIG" --linters "$BASELINE_LINTERS")
         bash "$GITHUB_ACTION_PATH/with-lint-env.sh" bash -ec '
           args=()
           [[ -z $1 ]] || args=(-tags "$1")
+          fields=Dir,ImportPath,GoFiles,CgoFiles,TestGoFiles,XTestGoFiles,Imports,TestImports,XTestImports,Match,ForTest,Module
           for os in linux windows darwin; do
-            GOOS=$os CGO_ENABLED=1 go list -e -json -deps -test "${args[@]}" ./...
+            GOOS=$os CGO_ENABLED=1 go list -e -json="$fields" -deps -test "${args[@]}" ./...
           done > "$RUNNER_TEMP/golist.json"
         ' _ "$tags"
         GIT_ATTR_SOURCE=$PR_MERGE_BASE git -c core.quotePath=true -C "$GITHUB_WORKSPACE" diff \
