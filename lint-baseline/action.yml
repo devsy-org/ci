@@ -19,6 +19,9 @@ inputs:
   working-directory:
     description: Directory containing the caller's go.mod.
     default: .
+  other-modules:
+    description: Fail or skip when changed Go files belong to another module.
+    default: fail
   guarded-linters:
     description: Comma-separated linters that new nolint directives may not suppress.
     default: cyclop,funlen,gocognit,gocyclo,nestif,maintidx,revive
@@ -138,6 +141,7 @@ runs:
         ALLOW_GENERATED: ${{ inputs.allow-generated }}
         ALLOW_NEW_MODULES: ${{ inputs.allow-new-modules }}
         MODULE_DIR: ${{ inputs.working-directory }}
+        OTHER_MODULES: ${{ inputs.other-modules }}
         DEAD_CODE: ${{ inputs.dead-code }}
       run: |
         tags=$("$RUNNER_TEMP/lint-baseline" config-check --config "$CONFIG" --linters "$BASELINE_LINTERS")
@@ -156,7 +160,7 @@ runs:
           "$PR_MERGE_BASE...HEAD" -- . |
           "$RUNNER_TEMP/lint-baseline" directives --root "$GITHUB_WORKSPACE" --guarded "$GUARDED_LINTERS" \
             --allow-generated="$ALLOW_GENERATED" --allow-new-modules="$ALLOW_NEW_MODULES" \
-            --go-list "$RUNNER_TEMP/golist.json" --module-dir "$MODULE_DIR"
+            --go-list "$RUNNER_TEMP/golist.json" --module-dir "$MODULE_DIR" --other-modules "$OTHER_MODULES"
 
         probe=$(mktemp -d /tmp/lint-baseline.XXXXXX)
         trap 'rm -rf -- "$probe"' EXIT
