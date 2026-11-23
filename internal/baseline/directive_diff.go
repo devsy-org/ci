@@ -102,7 +102,7 @@ func (d *diffState) bodyLine(line string) (int, error) {
 
 func (d *diffState) header(line string) error {
 	if d.pendingNew {
-		file, err := diffDestination(line)
+		file, err := diffDestination(line, "+++ ", "b/")
 		d.file, d.pendingNew = file, false
 		if d.fromNull {
 			d.newFile = file
@@ -136,6 +136,11 @@ func (d *diffState) fileHeader(line string) error {
 
 func (d *diffState) gitMetadata(line string) error {
 	switch {
+	case strings.HasPrefix(line, "rename to "), strings.HasPrefix(line, "copy to "):
+		prefix, _, _ := strings.Cut(line, " to ")
+		file, err := diffDestination(line, prefix+" to ", "")
+		d.newFile = file
+		return err
 	case strings.HasPrefix(line, "new file mode "):
 		file, err := newGitPath(d.gitPaths)
 		d.newFile = file
@@ -163,11 +168,11 @@ func newGitPath(paths string) (string, error) {
 	if len(paths)%2 == 0 || paths[middle] != ' ' {
 		return "", errors.New("invalid new file paths")
 	}
-	return diffDestination("+++ " + paths[middle+1:])
+	return diffDestination(paths[middle+1:], "", "b/")
 }
 
-func diffDestination(line string) (string, error) {
-	path, ok := strings.CutPrefix(line, "+++ ")
+func diffDestination(line, header, pathPrefix string) (string, error) {
+	path, ok := strings.CutPrefix(line, header)
 	if !ok {
 		return "", errors.New("expected destination file header")
 	}
@@ -182,7 +187,7 @@ func diffDestination(line string) (string, error) {
 	if path == "/dev/null" {
 		return path, nil
 	}
-	path, ok = strings.CutPrefix(path, "b/")
+	path, ok = strings.CutPrefix(path, pathPrefix)
 	if !ok || path == "" {
 		return "", errors.New("invalid destination path")
 	}

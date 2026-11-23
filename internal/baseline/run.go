@@ -24,6 +24,9 @@ const (
 
 // Run reports lint baseline violations as exit 1, and usage or I/O errors as exit 2.
 func Run(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 && args[0] == directivesCommand {
+		return executeDirectives(args[1:], os.Stdin, stdout, stderr)
+	}
 	return execute(args, stdout, stderr, os.Getenv("GITHUB_STEP_SUMMARY"))
 }
 
@@ -36,6 +39,10 @@ func execute(args []string, stdout, stderr io.Writer, summaryPath string) int {
 			return code
 		}
 	}
+	return runError(stderr, err)
+}
+
+func runError(stderr io.Writer, err error) int {
 	message := strings.NewReplacer("\r", `\r`, "\n", `\n`).Replace(err.Error())
 	_, _ = fmt.Fprintln(stderr, "lint-baseline:", message)
 	return 2
@@ -43,7 +50,7 @@ func execute(args []string, stdout, stderr io.Writer, summaryPath string) int {
 
 func parseOptions(args []string) (options, error) {
 	if len(args) == 0 || (args[0] != checkCommand && args[0] != updateCommand) {
-		return options{}, errors.New("expected check or update")
+		return options{}, errors.New("expected check or update (or directives)")
 	}
 	return parseFlags(args[0], args[1:])
 }
