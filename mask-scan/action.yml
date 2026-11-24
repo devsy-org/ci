@@ -1,0 +1,39 @@
+name: Mask Scan
+description: Check added lines in a pull request for masked values.
+inputs:
+  base-ref:
+    description: Target branch name on origin.
+    default: ${{ github.event.pull_request.base.ref }}
+  report-only:
+    description: Report matches without failing the pull request.
+    default: "false"
+  allow:
+    description: Repo-relative glob patterns or directory prefixes, one per line.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      with:
+        go-version-file: ${{ github.action_path }}/../go.mod
+        cache: false
+    - name: Check added lines for masked values
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      env:
+        BASE_REF: ${{ inputs.base-ref }}
+        REPORT_ONLY: ${{ inputs.report-only }}
+        ALLOW: ${{ inputs.allow }}
+        # Keep the caller's Go settings from changing how the tool builds.
+        GOFLAGS: -mod=readonly
+        GOTOOLCHAIN: local
+        GOWORK: "off"
+      run: |
+        args=()
+        while IFS= read -r pattern; do
+          if [[ -n "$pattern" ]]; then
+            args+=(--allow "$pattern")
+          fi
+        done <<< "$ALLOW"
+        go run ./cmd/mask-scan --repo "$GITHUB_WORKSPACE" --base-ref "$BASE_REF" \
+          --report-only="$REPORT_ONLY" "${args[@]}"
