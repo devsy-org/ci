@@ -62,7 +62,11 @@ func hunkStart(line string) int {
 func addedPath(name string, allow []string) string {
 	name = strings.TrimSuffix(name, "\t")
 	if strings.HasPrefix(name, `"`) {
-		name, _ = strconv.Unquote(name)
+		unquoted, err := strconv.Unquote(name)
+		if err != nil {
+			unquoted = strings.TrimPrefix(name, `"`)
+		}
+		name = unquoted
 	}
 	name, ok := strings.CutPrefix(name, "b/")
 	if !ok || allowed(name, allow) {

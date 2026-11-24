@@ -34,6 +34,7 @@ func addedDiff(git gitFunc, baseRef string) (string, error) {
 	}
 	return git(
 		"-c", "core.quotePath=false", "diff", "--no-ext-diff", "--no-textconv",
-		"--no-color", "--no-renames", "-U0", strings.TrimSpace(base), "HEAD", "--",
+		"--no-color", "--text", "--src-prefix=a/", "--dst-prefix=b/", "--no-renames", "-U0",
+		strings.TrimSpace(base), "HEAD", "--",
 	)
 }

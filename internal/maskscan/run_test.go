@@ -26,7 +26,7 @@ func TestRun(t *testing.T) {
 	}{
 		{name: "reject a hit", base: fixtureBranch, want: 1},
 		{name: "report a hit", base: fixtureBranch, reportOnly: true},
-		{name: "allow a hit", base: fixtureBranch, allow: []string{"*.txt"}},
+		{name: "allow a hit", base: fixtureBranch, allow: []string{"*.txt", "*.dat"}},
 		{name: "missing base ref", base: "missing", want: 2},
 	}
 	for _, tt := range tests {
@@ -63,11 +63,29 @@ func TestRenderLogEscapesAnnotation(t *testing.T) {
 	}
 }
 
+func TestRenderLogKeepsPathsOffLineStart(t *testing.T) {
+	t.Parallel()
+	log := renderLog(
+		[]hit{{path: " ::stop-commands::x", line: 1}, {path: "bidi\u202e.txt", line: 2}},
+	)
+	for line := range strings.SplitSeq(strings.TrimSuffix(log, "\n"), "\n") {
+		if !strings.HasPrefix(line, "mask-scan: ") && !strings.HasPrefix(line, "::error file=") &&
+			!strings.HasPrefix(line, "FAIL: ") {
+			t.Errorf("log line starts with path text: %q", line)
+		}
+	}
+	if !strings.Contains(log, `mask-scan: "bidi\u202e.txt":2`) {
+		t.Errorf("non-graphic path should be quoted: %q", log)
+	}
+}
+
 func assertHitReport(t *testing.T, stdout, summaryDir string) {
 	t.Helper()
-	const want = "with space.txt:2: " + hitMessage + "\n" +
+	const want = "mask-scan: masked.dat:1: " + hitMessage + "\n" +
+		"::error file=masked.dat,line=1::" + hitMessage + "\n" +
+		"mask-scan: with space.txt:2: " + hitMessage + "\n" +
 		"::error file=with space.txt,line=2::" + hitMessage + "\n" +
-		"FAIL: 1 added line(s) with a run of 6 or more asterisks.\n"
+		"FAIL: 2 added line(s) with a run of 6 or more asterisks.\n"
 	if stdout != want {
 		t.Errorf("unexpected stdout:\n%s", stdout)
 	}
@@ -84,7 +102,7 @@ func assertHitReport(t *testing.T, stdout, summaryDir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range []string{"Mask scan: 1", "`with space.txt`:2", "add the path to `allow`"} {
+	for _, item := range []string{"Mask scan: 2", "`with space.txt`:2", "add the path to `allow`"} {
 		if !strings.Contains(string(summary), item) {
 			t.Errorf("summary missing %q:\n%s", item, summary)
 		}
@@ -99,11 +117,14 @@ func initFixture(t *testing.T) string {
 	dir := t.TempDir()
 	git := gitRunner(t.Context(), dir)
 	gitOutput(t, git, "init", "-b", fixtureBranch)
+	gitOutput(t, git, "config", "diff.noprefix", "true")
 	const name = "with space.txt"
 	writeFixture(t, dir, name, "original\n")
 	base := commitFixture(t, git, "")
 	gitOutput(t, git, "update-ref", "refs/remotes/origin/"+fixtureBranch, base)
 	writeFixture(t, dir, name, "original\nfixture "+strings.Repeat("*", 6)+"\n")
+	writeFixture(t, dir, ".gitattributes", "*.dat -diff\n")
+	writeFixture(t, dir, "masked.dat", strings.Repeat("*", 6)+"\n")
 	commitFixture(t, git, base)
 	return dir
 }

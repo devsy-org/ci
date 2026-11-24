@@ -37,6 +37,11 @@ func TestScanDiff(t *testing.T) {
 			want: []hit{{"spaced \u00e9.txt", 1}},
 		},
 		{
+			name: "keep a path git quoted in a way Go cannot unquote",
+			diff: "+++ \"b/odd\\q.txt\"\n@@ -0,0 +1 @@\n+" + mask + "\n",
+			want: []hit{{"odd\\q.txt\"", 1}},
+		},
+		{
 			name: "deleted and binary files",
 			diff: "+++ /dev/null\n@@ -1 +0,0 @@\n-" + mask + "\n" +
 				"diff --git a/image.bin b/image.bin\nBinary files a/image.bin and b/image.bin differ\n",

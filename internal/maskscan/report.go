@@ -15,7 +15,7 @@ func renderLog(hits []hit) string {
 	var log strings.Builder
 	escape := strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A", ":", "%3A", ",", "%2C")
 	for _, h := range hits {
-		fmt.Fprintf(&log, "%s:%d: %s\n", displayPath(h.path), h.line, hitMessage)
+		fmt.Fprintf(&log, "mask-scan: %s:%d: %s\n", displayPath(h.path), h.line, hitMessage)
 		fmt.Fprintf(
 			&log,
 			"::error file=%s,line=%d::%s\n",
@@ -33,8 +33,7 @@ func renderLog(hits []hit) string {
 }
 
 func displayPath(name string) string {
-	if strings.IndexFunc(name, unicode.IsControl) >= 0 ||
-		strings.HasPrefix(name, "::") || strings.HasPrefix(name, "##[") {
+	if strings.IndexFunc(name, func(r rune) bool { return !unicode.IsGraphic(r) }) >= 0 {
 		return strconv.QuoteToGraphic(name)
 	}
 	return name
