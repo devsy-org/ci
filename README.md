@@ -57,6 +57,32 @@ starting with `Size exception:`, followed by a reason of at least 20
 printable characters after trimming spaces. Set `report-only` to `"true"` to
 show the verdict without enforcing it.
 
+## Mask scan
+
+The `mask-scan` action fails a pull request when an added line contains six
+or more consecutive asterisks. This can happen when a tool's redacted view
+is written back to a file. The action reports file paths and line numbers
+without printing the matched text.
+
+Run it on `pull_request` with a read-only token and no secrets. Check out
+the caller repo first with `fetch-depth: 0` and `persist-credentials: false`.
+The action compares `HEAD` with its merge base on `origin/<base-ref>` and
+does not fetch refs. By default, `base-ref` is the PR target branch.
+Replace `<sha>` with the commit SHA to pin.
+
+```yaml
+      - uses: devsy-org/ci/mask-scan@<sha>
+        with:
+          allow: |
+            docs/examples/
+            fixtures/*.txt
+```
+
+Use `allow` for intentional runs, one repo-relative pattern per line.
+Patterns ending in `/` match all paths under that prefix. Other patterns
+use Go's `path.Match` syntax, where `*` does not match `/`.
+Set `report-only: "true"` to report matches without failing the job.
+
 ## Lint baseline
 
 The `lint-baseline` action runs golangci-lint and fails when a pull request
