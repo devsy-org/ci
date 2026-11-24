@@ -66,8 +66,16 @@ func TestRenderLogEscapesAnnotation(t *testing.T) {
 func TestRenderLogKeepsPathsOffLineStart(t *testing.T) {
 	t.Parallel()
 	log := renderLog(
-		[]hit{{path: " ::stop-commands::x", line: 1}, {path: "bidi\u202e.txt", line: 2}},
+		[]hit{
+			{path: " ::stop-commands::x", line: 1},
+			{path: "bidi\u202e.txt", line: 2},
+			{path: "##[stop-commands]pause.txt", line: 3},
+		},
 	)
+	if !strings.Contains(log, `mask-scan: \x23\x23[stop-commands]pause.txt:3`) ||
+		!strings.Contains(log, "::error file=##[stop-commands]pause.txt,line=3::") {
+		t.Errorf("legacy command prefix should be escaped in the plain line only: %q", log)
+	}
 	for line := range strings.SplitSeq(strings.TrimSuffix(log, "\n"), "\n") {
 		if !strings.HasPrefix(line, "mask-scan: ") && !strings.HasPrefix(line, "::error file=") &&
 			!strings.HasPrefix(line, "FAIL: ") {

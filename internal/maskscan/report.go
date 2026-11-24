@@ -34,9 +34,10 @@ func renderLog(hits []hit) string {
 
 func displayPath(name string) string {
 	if strings.IndexFunc(name, func(r rune) bool { return !unicode.IsGraphic(r) }) >= 0 {
-		return strconv.QuoteToGraphic(name)
+		name = strconv.QuoteToGraphic(name)
 	}
-	return name
+	// The runner's legacy command parser matches "##[" anywhere in a line.
+	return strings.ReplaceAll(name, "##[", `\x23\x23[`)
 }
 
 func renderSummary(hits []hit) string {
